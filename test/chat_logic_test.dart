@@ -28,6 +28,35 @@ void main() {
         'Dün',
       );
     });
+
+    test('son gorulme ve son aktif etiketi', () {
+      final now = DateTime(2026, 8, 30, 20, 0);
+      expect(
+        ChatFormat.lastSeenLabel(now, now: now, isOnline: true),
+        'Aktif',
+      );
+      expect(
+        ChatFormat.lastSeenLabel(
+          DateTime(2026, 8, 30, 19, 59),
+          now: now,
+        ),
+        'Son aktif: az once',
+      );
+      expect(
+        ChatFormat.lastSeenLabel(
+          DateTime(2026, 8, 30, 14, 5),
+          now: now,
+        ),
+        'Son gorulme: 14:05',
+      );
+      expect(
+        ChatFormat.lastSeenLabel(
+          DateTime(2026, 8, 29, 14, 5),
+          now: now,
+        ),
+        'Son gorulme: Dün 14:05',
+      );
+    });
   });
 
   group('ChatMessage', () {
@@ -117,7 +146,7 @@ void main() {
       expect(chat.isBlocked(), isTrue);
     });
 
-    test('yaziyor penceresi 6 saniyeden sonra kapanir', () {
+    test('yaziyor penceresi 8 saniyeden sonra kapanir', () {
       final chat = ChatRoom(
         id: 'u1_u2',
         participants: const ['u1', 'u2'],
@@ -125,7 +154,7 @@ void main() {
         lastMessageAt: null,
         lastMessageSenderId: '',
         typing: {
-          'u2': DateTime.now().subtract(const Duration(seconds: 8)),
+          'u2': DateTime.now().subtract(const Duration(seconds: 9)),
         },
       );
 

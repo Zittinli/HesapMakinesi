@@ -113,6 +113,13 @@ class MessageBubble extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                       ],
+                      if (message.wasEdited) ...[
+                        const Text(
+                          'duzenlendi',
+                          style: TextStyle(color: Colors.white30, fontSize: 11),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
                       Text(
                         ChatFormat.messageTime(message.createdAt),
                         style: const TextStyle(color: Colors.white30, fontSize: 11),

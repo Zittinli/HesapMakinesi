@@ -263,20 +263,23 @@ class ChatService {
     required String chatId,
     required String readerId,
     required List<ChatMessage> messages,
+    bool writeReceipts = true,
   }) async {
     final batch = _firestore.batch();
     var writes = 0;
 
-    for (final message in messages) {
-      if (message.senderId == readerId || message.isReadBy(readerId)) {
-        continue;
-      }
+    if (writeReceipts) {
+      for (final message in messages) {
+        if (message.senderId == readerId || message.isReadBy(readerId)) {
+          continue;
+        }
 
-      final ref = _chats.doc(chatId).collection('messages').doc(message.id);
-      batch.update(ref, {
-        'readBy': FieldValue.arrayUnion([readerId]),
-      });
-      writes += 1;
+        final ref = _chats.doc(chatId).collection('messages').doc(message.id);
+        batch.update(ref, {
+          'readBy': FieldValue.arrayUnion([readerId]),
+        });
+        writes += 1;
+      }
     }
 
     if (writes > 0) {
@@ -393,6 +396,35 @@ class ChatService {
     return snap.exists;
   }
 
+  Future<void> editMessage({
+    required String chatId,
+    required String messageId,
+    required String senderId,
+    required String text,
+  }) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+
+    final ref = _chats.doc(chatId).collection('messages').doc(messageId);
+    final snap = await ref.get();
+    final oldText = snap.data()?['text'] as String? ?? '';
+
+    await ref.update({
+      'text': trimmed,
+      'editedAt': FieldValue.serverTimestamp(),
+    });
+
+    try {
+      final chatSnap = await _chats.doc(chatId).get();
+      final data = chatSnap.data();
+      if (data != null &&
+          data['lastMessageSenderId'] == senderId &&
+          data['lastMessage'] == oldText) {
+        await _chats.doc(chatId).update({'lastMessage': trimmed});
+      }
+    } catch (_) {}
+  }
+
   Future<void> deleteMessageForMe({
     required String chatId,
     required String messageId,
@@ -407,12 +439,17 @@ class ChatService {
     required String chatId,
     required String messageId,
     required String senderId,
-  }) {
-    return _chats.doc(chatId).collection('messages').doc(messageId).update({
-      'deletedForEveryone': true,
-      'text': '',
-      'mediaUrl': null,
-    });
+  }) async {
+    final ref = _chats.doc(chatId).collection('messages').doc(messageId);
+    try {
+      await ref.update({
+        'deletedForEveryone': true,
+        'text': '',
+        'mediaUrl': null,
+      });
+    } catch (_) {
+      await ref.delete();
+    }
   }
 
   Future<void> purgeExpiredMessages({

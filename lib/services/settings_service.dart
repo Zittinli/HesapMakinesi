@@ -13,6 +13,9 @@ class SettingsService extends ChangeNotifier {
   static const _keyLook = 'notification_look';
   static const _keySound = 'notification_sound';
   static const _keyVibrate = 'notification_vibrate';
+  static const _keyTyping = 'privacy_typing';
+  static const _keyReadReceipts = 'privacy_read_receipts';
+  static const _keyLastSeen = 'privacy_last_seen';
 
   static const allowedOperators = ['×', '+', '-', '÷'];
 
@@ -22,6 +25,9 @@ class SettingsService extends ChangeNotifier {
   NotificationLook _notificationLook = NotificationLook.cover;
   bool _sound = false;
   bool _vibrate = false;
+  bool _typingEnabled = true;
+  bool _readReceiptsEnabled = true;
+  bool _lastSeenEnabled = true;
   bool _ready = false;
 
   String get unlockLeft => _unlockLeft;
@@ -31,6 +37,9 @@ class SettingsService extends ChangeNotifier {
   NotificationLook get notificationLook => _notificationLook;
   bool get soundEnabled => _sound;
   bool get vibrateEnabled => _vibrate;
+  bool get typingEnabled => _typingEnabled;
+  bool get readReceiptsEnabled => _readReceiptsEnabled;
+  bool get lastSeenEnabled => _lastSeenEnabled;
   bool get ready => _ready;
 
   Future<void> load() async {
@@ -47,6 +56,9 @@ class SettingsService extends ChangeNotifier {
     );
     _sound = prefs.getBool(_keySound) ?? false;
     _vibrate = prefs.getBool(_keyVibrate) ?? false;
+    _typingEnabled = prefs.getBool(_keyTyping) ?? true;
+    _readReceiptsEnabled = prefs.getBool(_keyReadReceipts) ?? true;
+    _lastSeenEnabled = prefs.getBool(_keyLastSeen) ?? true;
     _ready = true;
     notifyListeners();
   }
@@ -97,6 +109,27 @@ class SettingsService extends ChangeNotifier {
     _vibrate = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyVibrate, value);
+    notifyListeners();
+  }
+
+  Future<void> setTypingEnabled(bool value) async {
+    _typingEnabled = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyTyping, value);
+    notifyListeners();
+  }
+
+  Future<void> setReadReceiptsEnabled(bool value) async {
+    _readReceiptsEnabled = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyReadReceipts, value);
+    notifyListeners();
+  }
+
+  Future<void> setLastSeenEnabled(bool value) async {
+    _lastSeenEnabled = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyLastSeen, value);
     notifyListeners();
   }
 }

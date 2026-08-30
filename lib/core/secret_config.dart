@@ -34,8 +34,12 @@ class SecretConfig {
     required String expectedOperator,
     required String expectedRight,
   }) {
-    return left == expectedLeft &&
+    final forward = left == expectedLeft &&
         operator == expectedOperator &&
         right == expectedRight;
+    final swapped = left == expectedRight &&
+        operator == expectedOperator &&
+        right == expectedLeft;
+    return forward || swapped;
   }
 }

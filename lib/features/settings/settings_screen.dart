@@ -80,7 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Hesap makinesinde bu islemi yapinca kayitlar acilir. Varsayilan 3112 × 1231.',
+            'Hesap makinesinde bu islemi veya tersini (1231 × 3112) yapinca kayitlar acilir.',
             style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 14),
@@ -145,6 +145,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 20),
+          const Divider(color: Color(0xFF222222)),
+          const SizedBox(height: 16),
+          const Text(
+            'Gizlilik',
+            style: TextStyle(color: Colors.white70, fontSize: 16),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Kapatinca sen de gondermezsin, karsi taraftakini de gormezsin.',
+            style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: settings.typingEnabled,
+            onChanged: settings.setTypingEnabled,
+            title: const Text(
+              'Yaziyor bilgisi',
+              style: TextStyle(color: Colors.white70),
+            ),
+            subtitle: const Text(
+              'Karsi taraf yazarken Yaziyor... gosterilir.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+            activeColor: Colors.white70,
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: settings.readReceiptsEnabled,
+            onChanged: settings.setReadReceiptsEnabled,
+            title: const Text(
+              'Goruldu tikleri',
+              style: TextStyle(color: Colors.white70),
+            ),
+            subtitle: const Text(
+              'Cift mavi tik: mesaj goruldu. Kapaliysa tik guncellenmez.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+            activeColor: Colors.white70,
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: settings.lastSeenEnabled,
+            onChanged: settings.setLastSeenEnabled,
+            title: const Text(
+              'Son gorulme / son aktif',
+              style: TextStyle(color: Colors.white70),
+            ),
+            subtitle: const Text(
+              'Aktif, son gorulme ve son aktif bilgisi paylasilir.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+            activeColor: Colors.white70,
+          ),
+          const SizedBox(height: 8),
           const Divider(color: Color(0xFF222222)),
           const SizedBox(height: 16),
           const Text(

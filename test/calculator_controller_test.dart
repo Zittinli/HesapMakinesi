@@ -20,6 +20,14 @@ void main() {
       ),
       isFalse,
     );
+    expect(
+      SecretConfig.shouldUnlockOperation(
+        left: '1231',
+        operator: '×',
+        right: '3112',
+      ),
+      isTrue,
+    );
   });
 
   test('degistirilen giris kodunu tanir', () {
@@ -42,6 +50,20 @@ void main() {
       isTrue,
     );
     expect(controller.display, '0');
+  });
+
+  test('giris kodunun tersi de acar', () {
+    final controller = CalculatorController();
+
+    for (final digit in '1231'.split('')) {
+      controller.onButtonPressed(digit);
+    }
+    controller.onButtonPressed('×');
+    for (final digit in '3112'.split('')) {
+      controller.onButtonPressed(digit);
+    }
+
+    expect(controller.onEqualsPressed(), isTrue);
   });
 
   test('hesap makinesi gizli islemi algilar', () {
@@ -72,6 +94,63 @@ void main() {
 
     controller.onButtonPressed('C');
     expect(controller.display, '0');
+  });
+
+  test('tek tek silme son rakami siler', () {
+    final controller = CalculatorController();
+
+    for (final digit in '3112'.split('')) {
+      controller.onButtonPressed(digit);
+    }
+    controller.onButtonPressed('⌫');
+    expect(controller.display, '311');
+    controller.onButtonPressed('⌫');
+    controller.onButtonPressed('⌫');
+    controller.onButtonPressed('⌫');
+    expect(controller.display, '0');
+  });
+
+  test('tek tek silme bekleyen islemi kaldirir', () {
+    final controller = CalculatorController();
+
+    controller.onButtonPressed('7');
+    controller.onButtonPressed('+');
+    expect(controller.expressionDisplay, '7 +');
+    controller.onButtonPressed('⌫');
+    expect(controller.display, '7');
+    expect(controller.expressionDisplay, '7');
+  });
+
+  test('yatay bilimsel fonksiyonlar calisir', () {
+    final controller = CalculatorController();
+
+    controller.onButtonPressed('9');
+    controller.onButtonPressed('0');
+    controller.onButtonPressed('sin');
+    expect(controller.display, '1');
+
+    controller.onButtonPressed('C');
+    controller.onButtonPressed('9');
+    controller.onButtonPressed('√');
+    expect(controller.display, '3');
+
+    controller.onButtonPressed('C');
+    controller.onButtonPressed('2');
+    controller.onButtonPressed('xʸ');
+    controller.onButtonPressed('1');
+    controller.onButtonPressed('0');
+    expect(controller.onEqualsPressed(), isFalse);
+    expect(controller.display, '1024');
+
+    controller.onButtonPressed('C');
+    controller.onButtonPressed('5');
+    controller.onButtonPressed('±');
+    expect(controller.display, '-5');
+
+    controller.onButtonPressed('C');
+    controller.onButtonPressed('5');
+    controller.onButtonPressed('n!');
+    expect(controller.display, '120');
   });
 
   test('sifira bolme hataya dusurur', () {

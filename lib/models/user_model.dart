@@ -8,6 +8,7 @@ class AppUser {
     required this.isOnline,
     required this.lastSeen,
     required this.createdAt,
+    this.shareLastSeen = true,
   });
 
   final String id;
@@ -16,6 +17,7 @@ class AppUser {
   final bool isOnline;
   final DateTime? lastSeen;
   final DateTime? createdAt;
+  final bool shareLastSeen;
 
   factory AppUser.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -26,6 +28,7 @@ class AppUser {
       isOnline: data['isOnline'] as bool? ?? false,
       lastSeen: (data['lastSeen'] as Timestamp?)?.toDate(),
       createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+      shareLastSeen: data['shareLastSeen'] as bool? ?? true,
     );
   }
 
@@ -36,6 +39,7 @@ class AppUser {
       'isOnline': isOnline,
       'lastSeen': lastSeen != null ? Timestamp.fromDate(lastSeen!) : null,
       'createdAt': createdAt != null ? Timestamp.fromDate(createdAt!) : null,
+      'shareLastSeen': shareLastSeen,
     };
   }
 }

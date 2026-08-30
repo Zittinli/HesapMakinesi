@@ -1,10 +1,12 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/presence_service.dart';
+import '../../services/settings_service.dart';
 import '../chat/secret_hub_screen.dart';
 import 'login_screen.dart';
 
@@ -19,7 +21,20 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
   PresenceService? _presenceService;
 
   @override
+  void initState() {
+    super.initState();
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+    ]);
+  }
+
+  @override
   void dispose() {
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     _presenceService?.stop();
     try {
       context.read<NotificationService>().setHubOpen(false);
@@ -48,7 +63,9 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
           return const LoginScreen();
         }
 
-        _presenceService ??= PresenceService()..start();
+        _presenceService ??= PresenceService(
+          settings: context.read<SettingsService>(),
+        )..start();
         context.read<NotificationService>().setHubOpen(true);
 
         return SecretHubScreen(

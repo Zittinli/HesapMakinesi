@@ -18,6 +18,7 @@ class ChatMessage {
     this.expireSeconds,
     this.deletedFor = const [],
     this.deletedForEveryone = false,
+    this.editedAt,
   });
 
   final String id;
@@ -34,6 +35,9 @@ class ChatMessage {
   final int? expireSeconds;
   final List<String> deletedFor;
   final bool deletedForEveryone;
+  final DateTime? editedAt;
+
+  bool get wasEdited => editedAt != null;
 
   bool isReadBy(String userId) => readBy.contains(userId);
 
@@ -77,6 +81,7 @@ class ChatMessage {
       expireSeconds: (data['expireSeconds'] as num?)?.toInt(),
       deletedFor: List<String>.from(data['deletedFor'] as List? ?? []),
       deletedForEveryone: data['deletedForEveryone'] as bool? ?? false,
+      editedAt: (data['editedAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -97,6 +102,7 @@ class ChatMessage {
       if (replyToSenderId != null) 'replyToSenderId': replyToSenderId,
       if (expiresAt != null) 'expiresAt': Timestamp.fromDate(expiresAt!),
       if (expireSeconds != null) 'expireSeconds': expireSeconds,
+      if (editedAt != null) 'editedAt': Timestamp.fromDate(editedAt!),
     };
   }
 }

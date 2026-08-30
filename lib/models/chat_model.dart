@@ -65,7 +65,7 @@ class ChatRoom {
 
   bool isBlocked() => blockedBy.isNotEmpty;
 
-  bool isOtherTyping(String otherUserId, {Duration window = const Duration(seconds: 6)}) {
+  bool isOtherTyping(String otherUserId, {Duration window = const Duration(seconds: 8)}) {
     final at = typing[otherUserId];
     if (at == null) return false;
     return DateTime.now().difference(at) <= window;

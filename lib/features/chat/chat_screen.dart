@@ -12,6 +12,7 @@ import '../../models/message_model.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/settings_service.dart';
 import 'media_gallery_screen.dart';
 import 'message_bubble.dart';
 
@@ -47,6 +48,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _typingSent = false;
   int? _expireSeconds;
   ChatMessage? _replyTo;
+  ChatMessage? _editingMessage;
   List<ChatMessage> _lastMarkedMessages = [];
   List<String> _lastPurgedIds = [];
   Stream<Map<String, ChatPref>>? _prefsStream;
@@ -121,11 +123,12 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted || widget.chatId.isEmpty) return;
     final uid = context.read<AuthService>().currentUser?.uid;
     if (uid == null) return;
+    final allowed = context.read<SettingsService>().typingEnabled;
     try {
       await context.read<ChatService>().setTyping(
             chatId: widget.chatId,
             userId: uid,
-            typing: typing,
+            typing: typing && allowed,
           );
     } catch (_) {}
   }
@@ -133,6 +136,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendText() async {
     final text = _messageController.text;
     if (text.trim().isEmpty || _isSending) return;
+
+    final editing = _editingMessage;
+    if (editing != null) {
+      await _saveEdit(editing, text);
+      return;
+    }
 
     setState(() => _isSending = true);
     _messageController.clear();
@@ -179,6 +188,50 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _saveEdit(ChatMessage message, String text) async {
+    if (widget.chatId.isEmpty || _isSending) return;
+    setState(() => _isSending = true);
+    try {
+      await context.read<ChatService>().editMessage(
+            chatId: widget.chatId,
+            messageId: message.id,
+            senderId: message.senderId,
+            text: text,
+          );
+      _messageController.clear();
+      if (mounted) {
+        setState(() => _editingMessage = null);
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mesaj duzenlenemedi. Tekrar deneyin.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  void _startEdit(ChatMessage message) {
+    setState(() {
+      _editingMessage = message;
+      _replyTo = null;
+      _messageController.text = message.text;
+      _messageController.selection = TextSelection.fromPosition(
+        TextPosition(offset: _messageController.text.length),
+      );
+    });
+    _focusNode.requestFocus();
+  }
+
+  void _cancelEdit() {
+    setState(() {
+      _editingMessage = null;
+      _messageController.clear();
+    });
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
@@ -191,35 +244,43 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _markAsRead(List<ChatMessage> messages) async {
+    if (widget.chatId.isEmpty) return;
     final currentUserId = context.read<AuthService>().currentUser!.uid;
+    final receipts = context.read<SettingsService>().readReceiptsEnabled;
     await context.read<ChatService>().markMessagesAsRead(
           chatId: widget.chatId,
           readerId: currentUserId,
           messages: messages,
+          writeReceipts: receipts,
         );
   }
 
   bool _sameMessages(List<ChatMessage> a, List<ChatMessage> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
-      if (a[i].id != b[i].id || a[i].readBy.length != b[i].readBy.length) {
+      if (a[i].id != b[i].id ||
+          a[i].text != b[i].text ||
+          a[i].readBy.length != b[i].readBy.length ||
+          a[i].editedAt != b[i].editedAt) {
         return false;
       }
     }
     return true;
   }
 
-  String _presenceText(AppUser? user, ChatRoom? chat) {
+  String _presenceText(AppUser? user, ChatRoom? chat, SettingsService settings) {
     if (widget.chatId.isEmpty) {
       return 'Cevrimdisi iletilecek';
     }
-    if (chat != null && chat.isOtherTyping(widget.otherUserId)) {
+    if (settings.typingEnabled &&
+        chat != null &&
+        chat.isOtherTyping(widget.otherUserId)) {
       return 'Yaziyor...';
     }
-    if (user == null) return 'Cevrimdisi iletilecek';
-    if (user.isOnline) return 'Aktif';
-    if (user.lastSeen == null) return '';
-    return ChatFormat.listTime(user.lastSeen);
+    if (!settings.lastSeenEnabled) return '';
+    if (user == null) return '';
+    if (!user.shareLastSeen) return '';
+    return ChatFormat.lastSeenLabel(user.lastSeen, isOnline: user.isOnline);
   }
 
   void _cycleTtl() {
@@ -308,6 +369,41 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _deleteMessage(ChatMessage message, {required bool forEveryone}) async {
+    if (widget.chatId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bekleyen mesaj henuz silinemiyor.')),
+        );
+      }
+      return;
+    }
+
+    final chatService = context.read<ChatService>();
+    final uid = context.read<AuthService>().currentUser!.uid;
+    try {
+      if (forEveryone) {
+        await chatService.deleteMessageForEveryone(
+          chatId: widget.chatId,
+          messageId: message.id,
+          senderId: message.senderId,
+        );
+      } else {
+        await chatService.deleteMessageForMe(
+          chatId: widget.chatId,
+          messageId: message.id,
+          userId: uid,
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mesaj silinemedi. Tekrar deneyin.')),
+        );
+      }
+    }
+  }
+
   Future<void> _onMessageLongPress(ChatMessage message, bool isMine) async {
     await showModalBottomSheet<void>(
       context: context,
@@ -330,20 +426,32 @@ class _ChatScreenState extends State<ChatScreen> {
                 title: const Text('Yanitla', style: TextStyle(color: Colors.white70)),
                 onTap: () {
                   Navigator.pop(context);
-                  setState(() => _replyTo = message);
+                  setState(() {
+                    _replyTo = message;
+                    _editingMessage = null;
+                  });
                   _focusNode.requestFocus();
                 },
               ),
+              if (isMine &&
+                  widget.chatId.isNotEmpty &&
+                  message.type == MessageType.text &&
+                  !message.deletedForEveryone &&
+                  !message.isExpired())
+                ListTile(
+                  leading: const Icon(Icons.edit_outlined, color: Colors.white70),
+                  title: const Text('Duzenle', style: TextStyle(color: Colors.white70)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _startEdit(message);
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.delete_outline, color: Colors.white70),
                 title: const Text('Benden sil', style: TextStyle(color: Colors.white70)),
                 onTap: () async {
                   Navigator.pop(context);
-                  await context.read<ChatService>().deleteMessageForMe(
-                        chatId: widget.chatId,
-                        messageId: message.id,
-                        userId: context.read<AuthService>().currentUser!.uid,
-                      );
+                  await _deleteMessage(message, forEveryone: false);
                 },
               ),
               if (isMine)
@@ -355,11 +463,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   onTap: () async {
                     Navigator.pop(context);
-                    await context.read<ChatService>().deleteMessageForEveryone(
-                          chatId: widget.chatId,
-                          messageId: message.id,
-                          senderId: message.senderId,
-                        );
+                    await _deleteMessage(message, forEveryone: true);
                   },
                 ),
             ],
@@ -390,7 +494,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final authService = context.read<AuthService>();
     final chatService = context.read<ChatService>();
+    final settings = context.watch<SettingsService>();
     final currentUserId = authService.currentUser!.uid;
+    if (!settings.typingEnabled && _typingSent) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_typingSent) return;
+        _typingSent = false;
+        _setTyping(false);
+      });
+    }
 
     return StreamBuilder<Map<String, ChatPref>>(
       stream: _prefsStream,
@@ -425,13 +537,25 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         TickingBuilder(
                           interval: const Duration(seconds: 2),
-                          builder: (_) => Text(
-                            _presenceText(user, chat),
-                            style: const TextStyle(
-                              color: Colors.white38,
-                              fontSize: 12,
-                            ),
-                          ),
+                          builder: (_) {
+                            final text = _presenceText(user, chat, settings);
+                            final typing = text == 'Yaziyor...';
+                            if (text.isEmpty) {
+                              return const SizedBox.shrink();
+                            }
+                            return Text(
+                              text,
+                              style: TextStyle(
+                                color: typing
+                                    ? const Color(0xFF90CAF9)
+                                    : Colors.white54,
+                                fontSize: 12,
+                                fontStyle: typing
+                                    ? FontStyle.italic
+                                    : FontStyle.normal,
+                              ),
+                            );
+                          },
                         ),
                       ],
                     );
@@ -567,7 +691,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                   message.createdAt,
                                 );
                             final isMine = message.senderId == currentUserId;
-                            final isRead = message.readBy.any((id) => id != currentUserId);
+                            final isRead = settings.readReceiptsEnabled &&
+                                message.readBy.any((id) => id != currentUserId);
 
                             return Column(
                               children: [
@@ -596,6 +721,53 @@ class _ChatScreenState extends State<ChatScreen> {
                       },
                     ),
                   ),
+                  TickingBuilder(
+                    interval: const Duration(seconds: 2),
+                    builder: (_) {
+                      final typing = settings.typingEnabled &&
+                          chat != null &&
+                          chat.isOtherTyping(widget.otherUserId);
+                      if (!typing) return const SizedBox.shrink();
+                      return Container(
+                        width: double.infinity,
+                        color: const Color(0xFF12181E),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        child: const Text(
+                          'Yaziyor...',
+                          style: TextStyle(
+                            color: Color(0xFF90CAF9),
+                            fontSize: 13,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  if (_editingMessage != null)
+                    Container(
+                      width: double.infinity,
+                      color: const Color(0xFF161616),
+                      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.edit_outlined, color: Colors.white38, size: 18),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'Mesaji duzenle',
+                              style: TextStyle(color: Colors.white54, fontSize: 13),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: _cancelEdit,
+                            icon: const Icon(Icons.close, color: Colors.white38, size: 18),
+                          ),
+                        ],
+                      ),
+                    ),
                   if (_replyTo != null)
                     Container(
                       width: double.infinity,
@@ -650,7 +822,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                 style: const TextStyle(color: Colors.white),
                                 cursorColor: Colors.white54,
                                 decoration: InputDecoration(
-                                  hintText: blocked ? 'Engellendi' : 'Yazi...',
+                                  hintText: blocked
+                                      ? 'Engellendi'
+                                      : (_editingMessage != null
+                                          ? 'Mesaji duzenle...'
+                                          : 'Yazi...'),
                                   hintStyle: const TextStyle(color: Colors.white30),
                                   filled: true,
                                   fillColor: const Color(0xFF1A1A1A),

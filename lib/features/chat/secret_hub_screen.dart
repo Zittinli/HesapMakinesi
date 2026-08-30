@@ -11,6 +11,7 @@ import '../../models/pending_thread_model.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/settings_service.dart';
 import '../chat/chat_screen.dart';
 import '../settings/settings_screen.dart';
 
@@ -404,14 +405,17 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
           onPressed: widget.onExitToCalculator,
         ),
         actions: [
-          IconButton(
-            tooltip: 'Ayarlar',
-            icon: const Icon(Icons.settings_outlined, size: 22),
+          TextButton.icon(
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const SettingsScreen()),
               );
             },
+            icon: const Icon(Icons.settings_outlined, size: 18, color: Colors.white70),
+            label: const Text(
+              'Ayarlar',
+              style: TextStyle(color: Colors.white70),
+            ),
           ),
           IconButton(
             tooltip: 'Hesap makinesine don',
@@ -481,6 +485,23 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                         )
                       : const Text('Devam'),
                 ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    side: const BorderSide(color: Colors.white24),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const SettingsScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.settings_outlined, size: 18),
+                  label: const Text('Ayarlar'),
+                ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: _searchController,
@@ -538,6 +559,32 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
 
                         return Column(
                           children: [
+                            ListTile(
+                              dense: true,
+                              leading: const Icon(
+                                Icons.settings_outlined,
+                                color: Colors.white38,
+                                size: 20,
+                              ),
+                              title: const Text(
+                                'Ayarlar',
+                                style: TextStyle(
+                                  color: Colors.white54,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              trailing: const Icon(
+                                Icons.chevron_right,
+                                color: Colors.white30,
+                              ),
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const SettingsScreen(),
+                                  ),
+                                );
+                              },
+                            ),
                             if (hidden.isNotEmpty)
                               ListTile(
                                 dense: true,
@@ -724,6 +771,7 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
   @override
   Widget build(BuildContext context) {
     final otherIds = _otherIds;
+    final typingEnabled = context.watch<SettingsService>().typingEnabled;
 
     if (otherIds.isEmpty) {
       return const Center(
@@ -851,7 +899,8 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                             TickingBuilder(
                               interval: const Duration(seconds: 2),
                               builder: (_) {
-                                final nowTyping = chat.isOtherTyping(otherUserId);
+                                final nowTyping =
+                                    typingEnabled && chat.isOtherTyping(otherUserId);
                                 return Text(
                                   nowTyping
                                       ? 'Yaziyor...'

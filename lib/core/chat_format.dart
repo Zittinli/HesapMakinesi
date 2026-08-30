@@ -39,6 +39,28 @@ class ChatFormat {
     return DateFormat('HH:mm').format(time);
   }
 
+  static String lastSeenLabel(
+    DateTime? time, {
+    DateTime? now,
+    bool isOnline = false,
+  }) {
+    if (isOnline) return 'Aktif';
+    if (time == null) return '';
+    final current = now ?? DateTime.now();
+    final minutes = current.difference(time).inMinutes;
+    if (minutes < 2) return 'Son aktif: az once';
+    final today = DateTime(current.year, current.month, current.day);
+    final day = DateTime(time.year, time.month, time.day);
+    final diff = today.difference(day).inDays;
+    final clock = DateFormat('HH:mm').format(time);
+    if (diff == 0) return 'Son gorulme: $clock';
+    if (diff == 1) return 'Son gorulme: Dün $clock';
+    if (time.year == current.year) {
+      return 'Son gorulme: ${DateFormat('dd.MM').format(time)} $clock';
+    }
+    return 'Son gorulme: ${DateFormat('dd.MM.yy').format(time)} $clock';
+  }
+
   static bool isSameDay(DateTime? a, DateTime? b) {
     if (a == null || b == null) return false;
     return a.year == b.year && a.month == b.month && a.day == b.day;
