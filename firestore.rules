@@ -1,0 +1,378 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users/{userId}
+//   - email: string (required, immutable after create)
+//   - displayName: string (required, 1-80)
+//   - isOnline: bool
+//   - lastSeen: timestamp | null
+//   - createdAt: timestamp | null (immutable)
+//
+// Collection: users/{userId}/chatPrefs/{chatId}
+//   - pinned, muted, hidden: bool
+//   - pinnedAt, clearedAt: timestamp | absent
+//
+// Collection: users/{userId}/blocked/{blockedUserId}
+//   - createdAt: timestamp
+//
+// Collection: chats/{chatId}
+//   - participants: list<string> size 2, immutable
+//   - lastMessage: string (<= 180)
+//   - lastMessageAt: timestamp
+//   - lastMessageSenderId: string
+//   - unreadCounts: map
+//   - typing: map
+//   - blockedBy: list<string> (<= 2)
+//
+// Collection: chats/{chatId}/messages/{messageId}
+//   - senderId: string (immutable, auth.uid on create)
+//   - text: string (<= 4000)
+//   - type: 'text' | 'image'
+//   - mediaUrl: string | null
+//   - createdAt: timestamp
+//   - readBy: list<string>
+//   - replyToId, replyToText, replyToSenderId: string | null
+//   - expiresAt: timestamp | null
+//   - expireSeconds: number | null (10 | 60)
+//   - deletedFor: list<string>
+//   - deletedForEveryone: bool
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string
+        && email.size() > 4
+        && email.size() <= 320
+        && email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    function isValidUidList(value, maxSize) {
+      return value is list
+        && value.size() <= maxSize
+        && (value.size() == 0 || value[0] is string)
+        && (value.size() < 2 || value[1] is string);
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasOnly(['email', 'displayName', 'isOnline', 'lastSeen', 'createdAt'])
+        && isValidEmail(data.email)
+        && data.displayName is string
+        && data.displayName.size() > 0
+        && data.displayName.size() <= 80
+        && data.isOnline is bool
+        && (data.lastSeen == null || data.lastSeen is timestamp)
+        && (data.createdAt == null || data.createdAt is timestamp);
+    }
+
+    function isValidChatPref(data) {
+      return data.keys().hasOnly(['pinned', 'pinnedAt', 'muted', 'hidden', 'clearedAt'])
+        && (!('pinned' in data) || data.pinned is bool)
+        && (!('muted' in data) || data.muted is bool)
+        && (!('hidden' in data) || data.hidden is bool)
+        && (!('pinnedAt' in data) || data.pinnedAt == null || data.pinnedAt is timestamp)
+        && (!('clearedAt' in data) || data.clearedAt == null || data.clearedAt is timestamp);
+    }
+
+    function isValidBlocked(data) {
+      return data.keys().hasOnly(['createdAt'])
+        && (data.createdAt == null || data.createdAt is timestamp);
+    }
+
+    function isValidChat(data) {
+      return data.keys().hasOnly([
+          'participants',
+          'lastMessage',
+          'lastMessageAt',
+          'lastMessageSenderId',
+          'unreadCounts',
+          'typing',
+          'blockedBy'
+        ])
+        && data.participants is list
+        && data.participants.size() == 2
+        && data.participants[0] is string
+        && data.participants[1] is string
+        && data.participants[0].size() > 0
+        && data.participants[0].size() <= 128
+        && data.participants[1].size() > 0
+        && data.participants[1].size() <= 128
+        && data.lastMessage is string
+        && data.lastMessage.size() <= 2000
+        && (data.lastMessageAt == null || data.lastMessageAt is timestamp)
+        && data.lastMessageSenderId is string
+        && data.lastMessageSenderId.size() <= 128
+        && (!('unreadCounts' in data) || (data.unreadCounts is map && data.unreadCounts.size() <= 2))
+        && (!('typing' in data) || (data.typing is map && data.typing.size() <= 2))
+        && (!('blockedBy' in data) || isValidUidList(data.blockedBy, 2));
+    }
+
+    function chatDoc(chatId) {
+      return get(/databases/$(database)/documents/chats/$(chatId));
+    }
+
+    function isChatParticipant(chatId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/chats/$(chatId))
+        && chatDoc(chatId).data.participants is list
+        && request.auth.uid in chatDoc(chatId).data.participants;
+    }
+
+    function chatNotBlocked(chatId) {
+      return !exists(/databases/$(database)/documents/chats/$(chatId))
+        || !('blockedBy' in chatDoc(chatId).data)
+        || !(chatDoc(chatId).data.blockedBy is list)
+        || chatDoc(chatId).data.blockedBy.size() == 0;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasOnly([
+          'senderId',
+          'text',
+          'type',
+          'mediaUrl',
+          'createdAt',
+          'readBy',
+          'replyToId',
+          'replyToText',
+          'replyToSenderId',
+          'expiresAt',
+          'expireSeconds',
+          'deletedFor',
+          'deletedForEveryone'
+        ])
+        && data.senderId is string
+        && data.senderId.size() > 0
+        && data.senderId.size() <= 128
+        && data.text is string
+        && data.text.size() <= 4000
+        && data.type in ['text', 'image']
+        && (data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 2000))
+        && (data.createdAt == null || data.createdAt is timestamp)
+        && isValidUidList(data.readBy, 4)
+        && (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is timestamp)
+        && (!('expireSeconds' in data) || data.expireSeconds == null || (data.expireSeconds is number && data.expireSeconds in [10, 60]))
+        && (!('deletedFor' in data) || isValidUidList(data.deletedFor, 4))
+        && (!('deletedForEveryone' in data) || data.deletedForEveryone is bool)
+        && (!('replyToId' in data) || data.replyToId == null || (data.replyToId is string && data.replyToId.size() <= 128))
+        && (!('replyToText' in data) || data.replyToText == null || (data.replyToText is string && data.replyToText.size() <= 400))
+        && (!('replyToSenderId' in data) || data.replyToSenderId == null || (data.replyToSenderId is string && data.replyToSenderId.size() <= 128));
+    }
+
+    function messageImmutableUnchanged() {
+      return request.resource.data.senderId == resource.data.senderId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.type == resource.data.type
+        && request.resource.data.expireSeconds == resource.data.expireSeconds
+        && request.resource.data.expiresAt == resource.data.expiresAt
+        && request.resource.data.replyToId == resource.data.replyToId;
+    }
+
+    function currentBlockedBy() {
+      return ('blockedBy' in resource.data && resource.data.blockedBy is list)
+        ? resource.data.blockedBy
+        : [];
+    }
+
+    function blockedBySelfOnly() {
+      let before = currentBlockedBy();
+      let after = ('blockedBy' in request.resource.data
+          && request.resource.data.blockedBy is list)
+        ? request.resource.data.blockedBy
+        : [];
+      return after == before
+        || (
+          after.hasAll(before)
+          && after.size() == before.size() + 1
+          && request.auth.uid in after
+          && !(request.auth.uid in before)
+        )
+        || (
+          before.hasAll(after)
+          && before.size() == after.size() + 1
+          && request.auth.uid in before
+          && !(request.auth.uid in after)
+        );
+    }
+
+    function onlyReadReceiptUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+        && request.auth.uid in request.resource.data.readBy;
+    }
+
+    function onlyDeletedForMeUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletedFor'])
+        && request.auth.uid in request.resource.data.deletedFor;
+    }
+
+    function senderSoftDeleteUpdate() {
+      return resource.data.senderId == request.auth.uid
+        && request.resource.data.deletedForEveryone == true
+        && request.resource.data.text == ''
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['deletedForEveryone', 'text', 'mediaUrl']);
+    }
+
+    match /users/{userId} {
+      // Email lookup and presence need signed-in reads. Prototype only.
+      allow read: if isSignedIn();
+      allow create: if isSelf(userId) && isValidUser(request.resource.data);
+      allow update: if isSelf(userId)
+        && isValidUser(request.resource.data)
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+
+      match /chatPrefs/{chatId} {
+        allow read: if isSelf(userId);
+        allow create, update: if isSelf(userId)
+          && isValidChatPref(request.resource.data);
+        allow delete: if isSelf(userId);
+      }
+
+      match /blocked/{blockedUserId} {
+        allow read: if isSelf(userId);
+        allow create, update: if isSelf(userId)
+          && blockedUserId != userId
+          && isValidBlocked(request.resource.data);
+        allow delete: if isSelf(userId);
+      }
+
+      match /pendingSent/{emailKey} {
+        allow read: if isSelf(userId);
+        allow create, update: if isSelf(userId)
+          && request.resource.data.senderId == userId
+          && request.resource.data.recipientEmail is string
+          && request.resource.data.recipientEmail.size() <= 320
+          && request.resource.data.lastMessage is string
+          && request.resource.data.lastMessage.size() <= 2000;
+        allow delete: if isSelf(userId)
+          || (
+            isSignedIn()
+            && request.auth.token.email != null
+            && request.auth.token.email.lower() == resource.data.recipientEmail
+          );
+      }
+    }
+
+    match /pendingByEmail/{emailKey}/inbox/{senderId} {
+      function canReadInbox() {
+        return isSignedIn() && (
+          request.auth.uid == senderId
+          || (
+            request.auth.token.email != null
+            && request.auth.token.email.lower() == resource.data.recipientEmail
+          )
+        );
+      }
+
+      allow get: if isSignedIn() && (
+        !exists(/databases/$(database)/documents/pendingByEmail/$(emailKey)/inbox/$(senderId))
+        || canReadInbox()
+      );
+      allow list: if canReadInbox();
+      allow create, update: if isSignedIn()
+        && request.auth.uid == senderId
+        && request.resource.data.senderId == senderId
+        && request.resource.data.recipientEmail is string
+        && request.resource.data.recipientEmail.size() <= 320
+        && request.resource.data.lastMessage is string
+        && request.resource.data.lastMessage.size() <= 2000;
+      allow delete: if isSignedIn() && (
+        request.auth.uid == senderId
+        || (
+          request.auth.token.email != null
+          && request.auth.token.email.lower() == resource.data.recipientEmail
+        )
+      );
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && (
+          request.auth.uid == senderId
+          || (
+            exists(/databases/$(database)/documents/pendingByEmail/$(emailKey)/inbox/$(senderId))
+            && request.auth.token.email != null
+            && request.auth.token.email.lower() ==
+              get(/databases/$(database)/documents/pendingByEmail/$(emailKey)/inbox/$(senderId)).data.recipientEmail
+          )
+        );
+        allow create: if isSignedIn()
+          && request.auth.uid == senderId
+          && isValidMessage(request.resource.data)
+          && request.resource.data.senderId == request.auth.uid;
+        allow update, delete: if isSignedIn() && request.auth.uid == senderId;
+      }
+    }
+
+    match /chats/{chatId} {
+      allow get: if isSignedIn() && (
+        !exists(/databases/$(database)/documents/chats/$(chatId))
+        || request.auth.uid in resource.data.participants
+      );
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.participants;
+
+      allow create: if isSignedIn()
+        && isValidChat(request.resource.data)
+        && request.auth.uid in request.resource.data.participants;
+
+      allow update: if isSignedIn()
+        && resource.data.participants is list
+        && request.auth.uid in resource.data.participants
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.lastMessage is string
+        && request.resource.data.lastMessage.size() <= 2000
+        && blockedBySelfOnly();
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isChatParticipant(chatId);
+
+        allow create: if isChatParticipant(chatId)
+          && chatNotBlocked(chatId)
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000
+          && request.resource.data.type in ['text', 'image']
+          && (request.resource.data.createdAt == null
+            || request.resource.data.createdAt is timestamp)
+          && (
+            !('deletedForEveryone' in request.resource.data)
+            || request.resource.data.deletedForEveryone == false
+          );
+
+        allow update: if isChatParticipant(chatId)
+          && isValidMessage(request.resource.data)
+          && messageImmutableUnchanged()
+          && (
+            onlyReadReceiptUpdate()
+            || onlyDeletedForMeUpdate()
+            || senderSoftDeleteUpdate()
+          );
+
+        allow delete: if isChatParticipant(chatId)
+          && (
+            resource.data.senderId == request.auth.uid
+            || (
+              resource.data.expiresAt is timestamp
+              && resource.data.expiresAt < request.time
+            )
+          );
+      }
+    }
+  }
+}

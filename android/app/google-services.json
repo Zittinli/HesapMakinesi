@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "566929853130",
+    "project_id": "hesapmakinesi-d8f57",
+    "storage_bucket": "hesapmakinesi-d8f57.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:566929853130:android:a0e7ae76e86fe0cb634233",
+        "android_client_info": {
+          "package_name": "com.hesapmakinesi.hesap_makinesi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD5z0UvRtySoPs61BMJLizUzVqATHNXghE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
