@@ -1,16 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-enum MessageType { text, image }
-
 class ChatMessage {
   const ChatMessage({
     required this.id,
     required this.senderId,
     required this.text,
-    required this.type,
     required this.createdAt,
     required this.readBy,
-    this.mediaUrl,
     this.replyToId,
     this.replyToText,
     this.replyToSenderId,
@@ -24,8 +20,6 @@ class ChatMessage {
   final String id;
   final String senderId;
   final String text;
-  final MessageType type;
-  final String? mediaUrl;
   final DateTime? createdAt;
   final List<String> readBy;
   final String? replyToId;
@@ -65,13 +59,10 @@ class ChatMessage {
 
   factory ChatMessage.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
-    final typeRaw = data['type'] as String? ?? 'text';
     return ChatMessage(
       id: doc.id,
       senderId: data['senderId'] as String? ?? '',
       text: data['text'] as String? ?? '',
-      type: typeRaw == 'image' ? MessageType.image : MessageType.text,
-      mediaUrl: data['mediaUrl'] as String?,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
       readBy: List<String>.from(data['readBy'] as List? ?? []),
       replyToId: data['replyToId'] as String?,
@@ -89,14 +80,13 @@ class ChatMessage {
     return {
       'senderId': senderId,
       'text': text,
-      'type': type == MessageType.image ? 'image' : 'text',
+      'type': 'text',
       'createdAt': createdAt != null
           ? Timestamp.fromDate(createdAt!)
           : FieldValue.serverTimestamp(),
       'readBy': readBy,
       'deletedFor': deletedFor,
       'deletedForEveryone': deletedForEveryone,
-      if (mediaUrl != null) 'mediaUrl': mediaUrl,
       if (replyToId != null) 'replyToId': replyToId,
       if (replyToText != null) 'replyToText': replyToText,
       if (replyToSenderId != null) 'replyToSenderId': replyToSenderId,

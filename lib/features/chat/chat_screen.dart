@@ -16,7 +16,6 @@ import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/moderation_service.dart';
 import '../../services/settings_service.dart';
-import 'media_gallery_screen.dart';
 import 'message_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -360,17 +359,6 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       case 'report_user':
         await _reportUser();
-      case 'media':
-        if (!mounted) return;
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => MediaGalleryScreen(
-              chatId: widget.chatId,
-              viewerId: uid,
-              clearedAt: pref?.clearedAt,
-            ),
-          ),
-        );
       case 'calculator':
         _exitToCalculator();
     }
@@ -542,7 +530,6 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               if (isMine &&
                   widget.chatId.isNotEmpty &&
-                  message.type == MessageType.text &&
                   !message.deletedForEveryone &&
                   !message.isExpired())
                 ListTile(
@@ -710,10 +697,6 @@ class _ChatScreenState extends State<ChatScreen> {
                           'Kisiyi bildir',
                           style: TextStyle(color: Color(0xFFFFCC80)),
                         ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'media',
-                        child: Text('Medyayi gor', style: TextStyle(color: Colors.white70)),
                       ),
                       const PopupMenuItem(
                         value: 'calculator',

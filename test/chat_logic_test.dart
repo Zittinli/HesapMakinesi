@@ -69,7 +69,6 @@ void main() {
         id: '1',
         senderId: 'a',
         text: 'gizli',
-        type: MessageType.text,
         createdAt: DateTime.now().subtract(const Duration(seconds: 20)),
         readBy: const ['a'],
         expiresAt: DateTime.now().subtract(const Duration(seconds: 5)),
@@ -86,7 +85,6 @@ void main() {
         id: '2',
         senderId: 'a',
         text: 'eski',
-        type: MessageType.text,
         createdAt: created,
         readBy: const ['a'],
       );
@@ -106,7 +104,6 @@ void main() {
         id: 'ttl-off',
         senderId: 'a',
         text: 'kalici',
-        type: MessageType.text,
         createdAt: DateTime.now(),
         readBy: const ['a'],
       );
@@ -121,7 +118,6 @@ void main() {
         id: '3',
         senderId: 'a',
         text: 'sil',
-        type: MessageType.text,
         createdAt: DateTime.now(),
         readBy: const ['a'],
         deletedFor: const ['b'],

@@ -51,8 +51,7 @@ rules_version = '2';
 // Collection: chats/{chatId}/messages/{messageId}
 //   - senderId: string (immutable, auth.uid on create)
 //   - text: string (<= 4000)
-//   - type: 'text' | 'image'
-//   - mediaUrl: string | null
+//   - type: 'text'
 //   - createdAt: timestamp
 //   - readBy: list<string>
 //   - replyToId, replyToText, replyToSenderId: string | null
@@ -303,7 +302,6 @@ service cloud.firestore {
           'senderId',
           'text',
           'type',
-          'mediaUrl',
           'createdAt',
           'readBy',
           'replyToId',
@@ -320,8 +318,7 @@ service cloud.firestore {
         && data.senderId.size() <= 128
         && data.text is string
         && data.text.size() <= 4000
-        && data.type in ['text', 'image']
-        && (data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 2000))
+        && data.type == 'text'
         && (data.createdAt == null || data.createdAt is timestamp)
         && isValidUidList(data.readBy, 4)
         && (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is timestamp)
@@ -385,7 +382,7 @@ service cloud.firestore {
         && request.resource.data.deletedForEveryone == true
         && request.resource.data.text == ''
         && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['deletedForEveryone', 'text', 'mediaUrl']);
+          .hasOnly(['deletedForEveryone', 'text']);
     }
 
     function senderEditUpdate() {
@@ -542,7 +539,7 @@ service cloud.firestore {
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 4000
-          && request.resource.data.type in ['text', 'image']
+          && request.resource.data.type == 'text'
           && (request.resource.data.createdAt == null
             || request.resource.data.createdAt is timestamp)
           && (

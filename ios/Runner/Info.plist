@@ -45,9 +45,5 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Sohbette fotograf gondermek icin galeri erisimi gerekir.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Sohbette fotograf gondermek icin kamera erisimi gerekir.</string>
 </dict>
 </plist>

@@ -189,7 +189,6 @@ class ChatService {
       id: '',
       senderId: senderId,
       text: trimmed,
-      type: MessageType.text,
       createdAt: DateTime.now(),
       readBy: [senderId],
       replyToId: replyTo?.id,
@@ -200,30 +199,6 @@ class ChatService {
     );
 
     await _sendMessage(chatId, message, preview: trimmed);
-  }
-
-  Future<void> sendImageMessage({
-    required String chatId,
-    required String senderId,
-    required String mediaUrl,
-  }) async {
-    final chatSnap = await _chats.doc(chatId).get();
-    final chat = chatSnap.exists ? ChatRoom.fromFirestore(chatSnap) : null;
-    if (chat != null && chat.isBlocked()) {
-      throw const ChatBlockedException();
-    }
-
-    final message = ChatMessage(
-      id: '',
-      senderId: senderId,
-      text: 'Fotoğraf',
-      type: MessageType.image,
-      mediaUrl: mediaUrl,
-      createdAt: DateTime.now(),
-      readBy: [senderId],
-    );
-
-    await _sendMessage(chatId, message, preview: 'Fotoğraf');
   }
 
   Future<void> _sendMessage(
@@ -445,7 +420,6 @@ class ChatService {
       await ref.update({
         'deletedForEveryone': true,
         'text': '',
-        'mediaUrl': null,
       });
     } catch (_) {
       await ref.delete();
@@ -540,7 +514,6 @@ class ChatService {
       id: '',
       senderId: senderId,
       text: trimmed,
-      type: MessageType.text,
       createdAt: DateTime.now(),
       readBy: [senderId],
       replyToId: replyTo?.id,

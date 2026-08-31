@@ -11,7 +11,6 @@ import 'services/chat_service.dart';
 import 'services/notification_service.dart';
 import 'services/moderation_service.dart';
 import 'services/settings_service.dart';
-import 'services/storage_service.dart';
 
 class HesapMakinesiApp extends StatelessWidget {
   const HesapMakinesiApp({
@@ -34,7 +33,6 @@ class HesapMakinesiApp extends StatelessWidget {
         ChangeNotifierProvider.value(value: settings),
         ChangeNotifierProvider.value(value: authService),
         Provider.value(value: chatService),
-        Provider(create: (_) => StorageService()),
         Provider(create: (_) => ModerationService()),
         Provider(create: (_) => AuthLogService()),
         Provider<NotificationService>.value(value: notificationService),

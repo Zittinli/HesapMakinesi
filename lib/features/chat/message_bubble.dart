@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/chat_format.dart';
@@ -62,30 +61,10 @@ class MessageBubble extends StatelessWidget {
                     style: const TextStyle(color: Colors.white54, fontSize: 12),
                   ),
                 ),
-              if (message.type == MessageType.image &&
-                  message.mediaUrl != null &&
-                  message.mediaUrl!.isNotEmpty)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: CachedNetworkImage(
-                    imageUrl: message.mediaUrl!,
-                    height: 180,
-                    width: 180,
-                    fit: BoxFit.cover,
-                    placeholder: (_, __) => const SizedBox(
-                      height: 180,
-                      width: 180,
-                      child: Center(
-                        child: CircularProgressIndicator(color: Colors.white24),
-                      ),
-                    ),
-                  ),
-                )
-              else
-                Text(
-                  message.text,
-                  style: const TextStyle(color: Colors.white, fontSize: 15),
-                ),
+              Text(
+                message.text,
+                style: const TextStyle(color: Colors.white, fontSize: 15),
+              ),
               const SizedBox(height: 4),
               TickingBuilder(
                 builder: (_) {
