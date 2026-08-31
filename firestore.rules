@@ -9,6 +9,7 @@ rules_version = '2';
 //   - displayName: string (required, 1-80)
 //   - isOnline: bool
 //   - lastSeen: timestamp | null
+//   - lastLoginAt: timestamp | null
 //   - createdAt: timestamp | null (immutable)
 //
 // Collection: users/{userId}/chatPrefs/{chatId}
@@ -26,6 +27,26 @@ rules_version = '2';
 //   - unreadCounts: map
 //   - typing: map
 //   - blockedBy: list<string> (<= 2)
+//
+// Collection: reports/{reportId}
+//   - reporterId, reporterEmail, reportedUserId, reportedEmail
+//   - chatId, messageId, messageText, reason, status, action
+//   - createdAt, reviewedAt?
+//
+// Collection: authEvents/{eventId}
+//   - type: sign_in | sign_in_failed | sign_up | password_reset
+//           | otp_sent | otp_failed | otp_verified | sign_out
+//   - email: string (<= 120)
+//   - uid: string (<= 128, empty if unauthenticated)
+//   - success: bool
+//   - errorCode: string (<= 80)
+//   - createdAt: timestamp
+//
+// Collection: moderation/{userId}
+// Collection: bannedEmails/{email}
+//   - bannedPermanently: bool
+//   - timeoutUntil: timestamp | null
+//   - reason, email, updatedAt, updatedBy
 //
 // Collection: chats/{chatId}/messages/{messageId}
 //   - senderId: string (immutable, auth.uid on create)
@@ -52,6 +73,102 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function authEmailLower() {
+      return request.auth.token.email == null
+        ? ''
+        : request.auth.token.email.lower();
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && authEmailLower() == 'zttnlnkc@gmail.com';
+    }
+
+    function recordRestricts(data) {
+      return data.bannedPermanently == true
+        || (data.timeoutUntil is timestamp && data.timeoutUntil > request.time);
+    }
+
+    function isUserBanned() {
+      return (
+        exists(/databases/$(database)/documents/moderation/$(request.auth.uid))
+        && recordRestricts(
+          get(/databases/$(database)/documents/moderation/$(request.auth.uid)).data
+        )
+      ) || (
+        authEmailLower().size() > 0
+        && exists(/databases/$(database)/documents/bannedEmails/$(authEmailLower()))
+        && recordRestricts(
+          get(/databases/$(database)/documents/bannedEmails/$(authEmailLower())).data
+        )
+      );
+    }
+
+    function isValidModeration(data) {
+      return data.keys().hasOnly([
+          'bannedPermanently',
+          'timeoutUntil',
+          'reason',
+          'email',
+          'updatedAt',
+          'updatedBy'
+        ])
+        && data.bannedPermanently is bool
+        && (data.timeoutUntil == null || data.timeoutUntil is timestamp)
+        && data.reason is string
+        && data.reason.size() <= 400
+        && data.email is string
+        && data.email.size() <= 320
+        && (data.updatedAt == null || data.updatedAt is timestamp)
+        && data.updatedBy is string
+        && data.updatedBy.size() <= 128
+        && data.updatedBy == request.auth.uid;
+    }
+
+    function isValidReportCreate(data) {
+      return data.keys().hasOnly([
+          'reporterId',
+          'reporterEmail',
+          'reportedUserId',
+          'reportedEmail',
+          'chatId',
+          'messageId',
+          'messageText',
+          'reason',
+          'status',
+          'action',
+          'createdAt',
+          'history',
+          'transcript',
+          'historyCount'
+        ])
+        && data.reporterId == request.auth.uid
+        && data.reportedUserId is string
+        && data.reportedUserId.size() > 0
+        && data.reportedUserId.size() <= 128
+        && data.reportedUserId != request.auth.uid
+        && data.reporterEmail is string
+        && data.reporterEmail.size() <= 320
+        && data.reportedEmail is string
+        && data.reportedEmail.size() <= 320
+        && data.chatId is string
+        && data.chatId.size() > 0
+        && data.chatId.size() <= 128
+        && data.messageId is string
+        && data.messageId.size() > 0
+        && data.messageId.size() <= 128
+        && data.messageText is string
+        && data.messageText.size() <= 4000
+        && data.reason in ['spam', 'abuse', 'hate', 'sexual', 'illegal', 'other']
+        && data.status == 'pending'
+        && data.action is string
+        && data.action.size() <= 80
+        && (data.createdAt == null || data.createdAt is timestamp)
+        && (!('history' in data) || (data.history is list && data.history.size() <= 100))
+        && (!('transcript' in data) || (data.transcript is string && data.transcript.size() <= 20000))
+        && (!('historyCount' in data) || (data.historyCount is int && data.historyCount >= 0 && data.historyCount <= 100));
+    }
+
     function isValidEmail(email) {
       return email is string
         && email.size() > 4
@@ -73,7 +190,10 @@ service cloud.firestore {
           'isOnline',
           'lastSeen',
           'createdAt',
-          'shareLastSeen'
+          'shareLastSeen',
+          'acceptedTermsAt',
+          'emailOtpVerified',
+          'lastLoginAt'
         ])
         && isValidEmail(data.email)
         && data.displayName is string
@@ -82,7 +202,40 @@ service cloud.firestore {
         && data.isOnline is bool
         && (data.lastSeen == null || data.lastSeen is timestamp)
         && (data.createdAt == null || data.createdAt is timestamp)
-        && (!('shareLastSeen' in data) || data.shareLastSeen is bool);
+        && (!('shareLastSeen' in data) || data.shareLastSeen is bool)
+        && (!('acceptedTermsAt' in data) || data.acceptedTermsAt == null || data.acceptedTermsAt is timestamp)
+        && (!('emailOtpVerified' in data) || data.emailOtpVerified is bool)
+        && (!('lastLoginAt' in data) || data.lastLoginAt == null || data.lastLoginAt is timestamp);
+    }
+
+    function isValidAuthEvent(data) {
+      return data.keys().hasOnly([
+          'type',
+          'email',
+          'uid',
+          'success',
+          'errorCode',
+          'createdAt'
+        ])
+        && data.type in [
+          'sign_in',
+          'sign_in_failed',
+          'sign_up',
+          'password_reset',
+          'otp_sent',
+          'otp_failed',
+          'otp_verified',
+          'sign_out'
+        ]
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 120
+        && data.uid is string
+        && data.uid.size() <= 128
+        && data.success is bool
+        && data.errorCode is string
+        && data.errorCode.size() <= 80
+        && (data.createdAt == null || data.createdAt is timestamp);
     }
 
     function isValidChatPref(data) {
@@ -249,12 +402,29 @@ service cloud.firestore {
     match /users/{userId} {
       // Email lookup and presence need signed-in reads. Prototype only.
       allow read: if isSignedIn();
-      allow create: if isSelf(userId) && isValidUser(request.resource.data);
+      allow create: if isSelf(userId)
+        && isValidUser(request.resource.data)
+        && (
+          !('emailOtpVerified' in request.resource.data)
+          || request.resource.data.emailOtpVerified == false
+        );
       allow update: if isSelf(userId)
         && isValidUser(request.resource.data)
         && request.resource.data.email == resource.data.email
-        && request.resource.data.createdAt == resource.data.createdAt;
-      allow delete: if false;
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (
+          !('emailOtpVerified' in resource.data)
+            ? (
+              !('emailOtpVerified' in request.resource.data)
+              || request.resource.data.emailOtpVerified == false
+            )
+            : request.resource.data.emailOtpVerified == resource.data.emailOtpVerified
+        )
+        && (
+          !('acceptedTermsAt' in resource.data)
+          || request.resource.data.acceptedTermsAt == resource.data.acceptedTermsAt
+        );
+      allow delete: if isSelf(userId);
 
       match /chatPrefs/{chatId} {
         allow read: if isSelf(userId);
@@ -330,6 +500,7 @@ service cloud.firestore {
           )
         );
         allow create: if isSignedIn()
+          && !isUserBanned()
           && request.auth.uid == senderId
           && isValidMessage(request.resource.data)
           && request.resource.data.senderId == request.auth.uid;
@@ -338,14 +509,16 @@ service cloud.firestore {
     }
 
     match /chats/{chatId} {
-      allow get: if isSignedIn() && (
+      allow get: if isAdmin() || (isSignedIn() && (
         !exists(/databases/$(database)/documents/chats/$(chatId))
         || request.auth.uid in resource.data.participants
+      ));
+      allow list: if isAdmin() || (
+        isSignedIn() && request.auth.uid in resource.data.participants
       );
-      allow list: if isSignedIn()
-        && request.auth.uid in resource.data.participants;
 
       allow create: if isSignedIn()
+        && !isUserBanned()
         && isValidChat(request.resource.data)
         && request.auth.uid in request.resource.data.participants;
 
@@ -360,10 +533,11 @@ service cloud.firestore {
       allow delete: if false;
 
       match /messages/{messageId} {
-        allow read: if isChatParticipant(chatId);
+        allow read: if isAdmin() || isChatParticipant(chatId);
 
         allow create: if isChatParticipant(chatId)
           && chatNotBlocked(chatId)
+          && !isUserBanned()
           && request.resource.data.senderId == request.auth.uid
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
@@ -393,6 +567,87 @@ service cloud.firestore {
             )
           );
       }
+    }
+
+    match /reports/{reportId} {
+      allow create: if isSignedIn() && isValidReportCreate(request.resource.data);
+      allow read: if isAdmin();
+      allow update: if isAdmin()
+        && request.resource.data.reporterId == resource.data.reporterId
+        && request.resource.data.reportedUserId == resource.data.reportedUserId
+        && request.resource.data.messageId == resource.data.messageId
+        && request.resource.data.messageText == resource.data.messageText
+        && request.resource.data.reason == resource.data.reason
+        && request.resource.data.chatId == resource.data.chatId
+        && request.resource.data.transcript == resource.data.transcript
+        && request.resource.data.history == resource.data.history
+        && request.resource.data.status in ['pending', 'reviewed', 'actioned']
+        && request.resource.data.action is string
+        && request.resource.data.action.size() <= 80;
+      allow delete: if isAdmin();
+
+      match /history/{messageId} {
+        allow create: if isSignedIn()
+          && exists(/databases/$(database)/documents/reports/$(reportId))
+          && get(/databases/$(database)/documents/reports/$(reportId)).data.reporterId
+            == request.auth.uid
+          && request.resource.data.keys().hasOnly([
+            'messageId',
+            'senderId',
+            'text',
+            'createdAt',
+            'reported'
+          ])
+          && request.resource.data.messageId is string
+          && request.resource.data.messageId.size() <= 128
+          && request.resource.data.senderId is string
+          && request.resource.data.senderId.size() <= 128
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 500
+          && (request.resource.data.createdAt == null
+            || request.resource.data.createdAt is timestamp)
+          && request.resource.data.reported is bool;
+        allow read: if isAdmin();
+        allow update: if false;
+        allow delete: if isAdmin();
+      }
+    }
+
+    match /moderation/{userId} {
+      allow read: if isAdmin() || isSelf(userId);
+      allow create, update: if isAdmin() && isValidModeration(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /bannedEmails/{userEmail} {
+      allow read: if isAdmin() || authEmailLower() == userEmail;
+      allow create, update: if isAdmin() && isValidModeration(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /authEvents/{eventId} {
+      allow read: if isAdmin();
+      allow create: if isValidAuthEvent(request.resource.data)
+        && (
+          (
+            isSignedIn()
+            && request.resource.data.uid == request.auth.uid
+          )
+          || (
+            request.resource.data.uid.size() == 0
+            && request.resource.data.type in ['sign_in_failed', 'password_reset']
+          )
+        );
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    match /emailOtps/{userId} {
+      allow read, write: if false;
+    }
+
+    match /mail/{mailId} {
+      allow read, write: if false;
     }
   }
 }

@@ -1,7 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hesap_makinesi/core/admin_config.dart';
 import 'package:hesap_makinesi/core/chat_format.dart';
 import 'package:hesap_makinesi/models/chat_model.dart';
 import 'package:hesap_makinesi/models/message_model.dart';
+import 'package:hesap_makinesi/models/moderation_model.dart';
+import 'package:hesap_makinesi/models/report_model.dart';
+import 'package:hesap_makinesi/models/user_model.dart';
 import 'package:hesap_makinesi/services/chat_service.dart';
 
 void main() {
@@ -165,5 +169,111 @@ void main() {
   test('chatId sirali ve kararli', () {
     expect(ChatService.chatIdFor('b', 'a'), ChatService.chatIdFor('a', 'b'));
     expect(ChatService.chatIdFor('a', 'b'), 'a_b');
+  });
+
+  group('Moderation', () {
+    test('yonetici e-postasini tanir', () {
+      expect(AdminConfig.isAdminEmail('zttnlnkc@gmail.com'), isTrue);
+      expect(AdminConfig.isAdminEmail('ZTTNLNKC@GMAIL.COM'), isTrue);
+      expect(AdminConfig.isAdminEmail('zittuni1912@gmail.com'), isFalse);
+      expect(AdminConfig.isAdminEmail('baskasi@gmail.com'), isFalse);
+    });
+
+    test('kalici ban ve timeout kisitlar', () {
+      expect(const ModerationStatus(bannedPermanently: true).isRestricted(), isTrue);
+      expect(
+        ModerationStatus(
+          timeoutUntil: DateTime.now().add(const Duration(hours: 1)),
+        ).isRestricted(),
+        isTrue,
+      );
+      expect(
+        ModerationStatus(
+          timeoutUntil: DateTime.now().subtract(const Duration(minutes: 1)),
+        ).isRestricted(),
+        isFalse,
+      );
+    });
+
+    test('kalici ban timeouta ustun gelir', () {
+      final banned = const ModerationStatus(bannedPermanently: true);
+      final timeout = ModerationStatus(
+        timeoutUntil: DateTime.now().add(const Duration(days: 1)),
+      );
+      expect(ModerationStatus.stricter(timeout, banned).bannedPermanently, isTrue);
+    });
+  });
+
+  group('email OTP kayit kapisi', () {
+    test('eski kullanici kod ekranina dusmez', () {
+      final user = AppUser(
+        id: 'u1',
+        email: 'eski@example.com',
+        displayName: 'Eski',
+        isOnline: false,
+        lastSeen: DateTime(2026, 1, 1),
+        createdAt: DateTime(2026, 1, 1),
+      );
+      expect(user.needsEmailOtp, isFalse);
+    });
+
+    test('yeni kullanici kod dogrulamadan gecemez', () {
+      final user = AppUser(
+        id: 'u2',
+        email: 'yeni@example.com',
+        displayName: 'Yeni',
+        isOnline: false,
+        lastSeen: DateTime(2026, 8, 31),
+        createdAt: DateTime(2026, 8, 31),
+        acceptedTermsAt: DateTime(2026, 8, 31),
+      );
+      expect(user.needsEmailOtp, isTrue);
+    });
+
+    test('kod onaylaninca kapı acilir', () {
+      final user = AppUser(
+        id: 'u3',
+        email: 'yeni@example.com',
+        displayName: 'Yeni',
+        isOnline: false,
+        lastSeen: DateTime(2026, 8, 31),
+        createdAt: DateTime(2026, 8, 31),
+        acceptedTermsAt: DateTime(2026, 8, 31),
+        emailOtpVerified: true,
+      );
+      expect(user.needsEmailOtp, isFalse);
+    });
+  });
+
+  test('bildirimler sikayet edilen kullaniciya gore gruplanir', () {
+    MessageReport report({
+      required String id,
+      required String email,
+      required String status,
+    }) {
+      return MessageReport(
+        id: id,
+        reporterId: 'r1',
+        reporterEmail: 'a@x.com',
+        reportedUserId: 'u-$email',
+        reportedEmail: email,
+        chatId: 'c1',
+        messageId: id,
+        messageText: 'msg $id',
+        reason: ReportReason.abuse,
+        status: status,
+        createdAt: DateTime(2026, 8, 31),
+      );
+    }
+
+    final groups = groupReportsByUser([
+      report(id: '1', email: 'bad@x.com', status: 'pending'),
+      report(id: '2', email: 'bad@x.com', status: 'reviewed'),
+      report(id: '3', email: 'other@x.com', status: 'pending'),
+    ]);
+    expect(groups, hasLength(2));
+    final bad = groups.firstWhere((item) => item.email == 'bad@x.com');
+    expect(bad.reports, hasLength(2));
+    expect(bad.pendingCount, 1);
   });
 }

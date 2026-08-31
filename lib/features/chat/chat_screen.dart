@@ -9,9 +9,12 @@ import '../../core/ticking_builder.dart';
 import '../../models/chat_model.dart';
 import '../../models/chat_pref_model.dart';
 import '../../models/message_model.dart';
+import '../../models/moderation_model.dart';
+import '../../models/report_model.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/moderation_service.dart';
 import '../../services/settings_service.dart';
 import 'media_gallery_screen.dart';
 import 'message_bubble.dart';
@@ -136,6 +139,21 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendText() async {
     final text = _messageController.text;
     if (text.trim().isEmpty || _isSending) return;
+
+    final currentUser = context.read<AuthService>().currentUser!;
+    try {
+      await context.read<ModerationService>().ensureNotRestricted(
+            currentUser.uid,
+            currentUser.email ?? '',
+          );
+    } on AccountRestrictedException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message)),
+        );
+      }
+      return;
+    }
 
     final editing = _editingMessage;
     if (editing != null) {
@@ -404,6 +422,54 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _reportMessage(ChatMessage message) async {
+    final reason = await showModalBottomSheet<ReportReason>(
+      context: context,
+      backgroundColor: const Color(0xFF161616),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Neden bildiriyorsunuz?',
+                  style: TextStyle(color: Colors.white70, fontSize: 15),
+                ),
+              ),
+              ...ReportReason.values.map(
+                (item) => ListTile(
+                  title: Text(item.label, style: const TextStyle(color: Colors.white70)),
+                  onTap: () => Navigator.pop(context, item),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (reason == null || !mounted) return;
+    try {
+      await context.read<ModerationService>().reportMessage(
+            message: message,
+            chatId: widget.chatId,
+            reportedUserId: message.senderId,
+            reportedEmail: widget.otherUserName,
+            reason: reason,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bildirim gonderildi.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bildirim gonderilemedi. Tekrar deneyin.')),
+      );
+    }
+  }
+
   Future<void> _onMessageLongPress(ChatMessage message, bool isMine) async {
     await showModalBottomSheet<void>(
       context: context,
@@ -454,6 +520,18 @@ class _ChatScreenState extends State<ChatScreen> {
                   await _deleteMessage(message, forEveryone: false);
                 },
               ),
+              if (!isMine && widget.chatId.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined, color: Color(0xFFFFCC80)),
+                  title: const Text(
+                    'Mesaji bildir',
+                    style: TextStyle(color: Color(0xFFFFCC80)),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _reportMessage(message);
+                  },
+                ),
               if (isMine)
                 ListTile(
                   leading: const Icon(Icons.delete_forever_outlined, color: Color(0xFFFF8A80)),

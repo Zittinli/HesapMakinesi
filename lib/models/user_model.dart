@@ -9,6 +9,8 @@ class AppUser {
     required this.lastSeen,
     required this.createdAt,
     this.shareLastSeen = true,
+    this.acceptedTermsAt,
+    this.emailOtpVerified = false,
   });
 
   final String id;
@@ -18,6 +20,13 @@ class AppUser {
   final DateTime? lastSeen;
   final DateTime? createdAt;
   final bool shareLastSeen;
+  final DateTime? acceptedTermsAt;
+  final bool emailOtpVerified;
+
+  bool get needsEmailOtp {
+    if (emailOtpVerified) return false;
+    return acceptedTermsAt != null;
+  }
 
   factory AppUser.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -29,6 +38,8 @@ class AppUser {
       lastSeen: (data['lastSeen'] as Timestamp?)?.toDate(),
       createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
       shareLastSeen: data['shareLastSeen'] as bool? ?? true,
+      acceptedTermsAt: (data['acceptedTermsAt'] as Timestamp?)?.toDate(),
+      emailOtpVerified: data['emailOtpVerified'] as bool? ?? false,
     );
   }
 
@@ -40,6 +51,9 @@ class AppUser {
       'lastSeen': lastSeen != null ? Timestamp.fromDate(lastSeen!) : null,
       'createdAt': createdAt != null ? Timestamp.fromDate(createdAt!) : null,
       'shareLastSeen': shareLastSeen,
+      if (acceptedTermsAt != null)
+        'acceptedTermsAt': Timestamp.fromDate(acceptedTermsAt!),
+      'emailOtpVerified': emailOtpVerified,
     };
   }
 }

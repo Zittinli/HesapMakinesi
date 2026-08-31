@@ -624,4 +624,37 @@ class ChatService {
     }
     return watchPendingMessages(senderId: myId, recipientEmail: otherEmail);
   }
+
+  Future<void> deleteAccountData(String userId) async {
+    final chats = await _chats.where('participants', arrayContains: userId).get();
+    for (final chat in chats.docs) {
+      final sent = await chat.reference
+          .collection('messages')
+          .where('senderId', isEqualTo: userId)
+          .get();
+      await _commitDeletes(sent.docs.map((doc) => doc.reference));
+    }
+
+    final userRef = _firestore.collection('users').doc(userId);
+    for (final name in ['chatPrefs', 'blocked', 'pendingSent']) {
+      final docs = await userRef.collection(name).get();
+      await _commitDeletes(docs.docs.map((doc) => doc.reference));
+    }
+
+    try {
+      await userRef.delete();
+    } catch (_) {}
+  }
+
+  Future<void> _commitDeletes(Iterable<DocumentReference<Map<String, dynamic>>> refs) async {
+    final list = refs.toList();
+    for (var i = 0; i < list.length; i += 400) {
+      final batch = _firestore.batch();
+      final end = i + 400 > list.length ? list.length : i + 400;
+      for (final ref in list.sublist(i, end)) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
+  }
 }

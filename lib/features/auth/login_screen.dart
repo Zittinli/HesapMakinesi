@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -38,12 +39,61 @@ class _LoginScreenState extends State<LoginScreen> {
             _emailController.text.trim(),
             _passwordController.text,
           );
+    } on FirebaseAuthException catch (error) {
+      setState(() => _error = _loginError(error.code));
     } catch (error) {
       setState(() => _error = 'Giris basarisiz. Bilgilerinizi kontrol edin.');
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _error = 'Sifre sifirlama icin e-posta yaz.');
+      return;
+    }
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      await context.read<AuthService>().sendPasswordReset(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sifre sifirlama baglantisi e-postana gonderildi. Gelen kutusu ve spam klasorunu kontrol et.',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Baglanti gonderilemedi. E-postayi kontrol et.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  String _loginError(String code) {
+    switch (code) {
+      case 'wrong-password':
+      case 'invalid-credential':
+      case 'invalid-login-credentials':
+        return 'E-posta veya sifre yanlis.';
+      case 'user-not-found':
+        return 'Bu e-posta ile hesap yok.';
+      case 'user-disabled':
+        return 'Bu hesap kapatilmis.';
+      case 'too-many-requests':
+        return 'Cok fazla deneme. Biraz bekleyip tekrar dene.';
+      case 'network-request-failed':
+        return 'Ag hatasi. Baglantini kontrol et.';
+      default:
+        return 'Giris basarisiz. Bilgilerinizi kontrol edin.';
     }
   }
 
@@ -115,6 +165,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       )
                     : const Text('Devam'),
+              ),
+              TextButton(
+                onPressed: _isLoading ? null : _resetPassword,
+                style: TextButton.styleFrom(foregroundColor: Colors.white54),
+                child: const Text('Sifremi unuttum'),
               ),
               TextButton(
                 onPressed: () {

@@ -1,10 +1,15 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/admin_config.dart';
+import '../../core/registration_terms.dart';
 import '../../core/secret_config.dart';
 import '../../models/notification_look.dart';
+import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/settings_service.dart';
+import 'admin_home_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -51,9 +56,80 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _deleteAccount() async {
+    final passwordController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF161616),
+          title: const Text(
+            'Hesabi sil',
+            style: TextStyle(color: Colors.white70),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Hesabiniz, mesajlariniz ve kisisel verileriniz silinir. Bu geri alinamaz.',
+                style: TextStyle(color: Colors.white54, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passwordController,
+                obscureText: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: 'Sifrenizi yazin',
+                  hintStyle: TextStyle(color: Colors.white30),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Vazgec'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text(
+                'Kalici sil',
+                style: TextStyle(color: Color(0xFFFF8A80)),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      passwordController.dispose();
+      return;
+    }
+    try {
+      await context.read<AuthService>().deleteAccount(passwordController.text);
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      final message = error.code == 'wrong-password' || error.code == 'invalid-credential'
+          ? 'Sifre yanlis.'
+          : 'Hesap silinemedi. Tekrar giris yapip deneyin.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Hesap silinemedi. Tekrar deneyin.')),
+      );
+    } finally {
+      passwordController.dispose();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsService>();
+    final email = context.read<AuthService>().currentUser?.email;
     final preview = NotificationCopy.of(
       look: settings.notificationLook,
       sender: 'Ahmet',
@@ -266,6 +342,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ? null
                 : () => context.read<NotificationService>().showPreview(),
             child: const Text('Ornek bildirimi goster'),
+          ),
+          if (AdminConfig.isAdminEmail(email)) ...[
+            const SizedBox(height: 20),
+            const Divider(color: Color(0xFF222222)),
+            const SizedBox(height: 16),
+            const Text(
+              'Yonetim',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Bildirilen kullanicilar ve giris kayitlari. Firebase Console > Firestore > reports ve authEvents koleksiyonlarinda da durur.',
+              style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white70,
+                side: const BorderSide(color: Colors.white24),
+              ),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => AdminHomeScreen(
+                      onExitToCalculator: () {
+                        Navigator.of(context).popUntil((route) => route.isFirst);
+                      },
+                    ),
+                  ),
+                );
+              },
+              child: const Text('Yonetim paneli'),
+            ),
+          ],
+          const SizedBox(height: 20),
+          const Divider(color: Color(0xFF222222)),
+          const SizedBox(height: 16),
+          const Text(
+            'Hesap',
+            style: TextStyle(color: Colors.white70, fontSize: 16),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Hesabinizi ve bu uygulamadaki kisisel verilerinizi kalici siler.',
+            style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: () => RegistrationTerms.openPrivacyPolicy(),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white54,
+              alignment: Alignment.centerLeft,
+              padding: EdgeInsets.zero,
+            ),
+            child: const Text('Gizlilik politikasi'),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFFF8A80),
+              side: const BorderSide(color: Color(0xFF5A2A2A)),
+            ),
+            onPressed: _deleteAccount,
+            child: const Text('Hesabi sil'),
           ),
         ],
       ),

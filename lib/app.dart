@@ -6,8 +6,11 @@ import 'core/theme/calculator_theme.dart';
 import 'features/auth/auth_gate_screen.dart';
 import 'features/calculator/calculator_screen.dart';
 import 'services/auth_service.dart';
+import 'services/auth_log_service.dart';
 import 'services/chat_service.dart';
 import 'services/notification_service.dart';
+import 'services/email_otp_service.dart';
+import 'services/moderation_service.dart';
 import 'services/settings_service.dart';
 import 'services/storage_service.dart';
 
@@ -33,6 +36,9 @@ class HesapMakinesiApp extends StatelessWidget {
         ChangeNotifierProvider.value(value: authService),
         Provider.value(value: chatService),
         Provider(create: (_) => StorageService()),
+        Provider(create: (_) => ModerationService()),
+        Provider(create: (_) => EmailOtpService()),
+        Provider(create: (_) => AuthLogService()),
         Provider<NotificationService>.value(value: notificationService),
       ],
       child: MaterialApp(
