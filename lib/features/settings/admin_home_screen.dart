@@ -87,12 +87,12 @@ class _AuthEventsList extends StatelessWidget {
       stream: context.read<AuthLogService>().watchEvents(),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
-          return const Center(
+          return Center(
             child: Padding(
-              padding: EdgeInsets.all(24),
+              padding: const EdgeInsets.all(24),
               child: Text(
-                'Giris kayitlari okunamadi. Firestore kurallarini yayinladiginden emin ol.',
-                style: TextStyle(color: Colors.white38),
+                'Giris kayitlari okunamadi.\n${snapshot.error}',
+                style: const TextStyle(color: Colors.white38),
                 textAlign: TextAlign.center,
               ),
             ),

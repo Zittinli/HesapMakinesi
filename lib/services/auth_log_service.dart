@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/auth_event_model.dart';
 
@@ -37,7 +38,9 @@ class AuthLogService {
             : errorCode,
         'createdAt': FieldValue.serverTimestamp(),
       });
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('authEvents yazilamadi ($type): $error');
+    }
   }
 
   Stream<List<AuthEvent>> watchEvents() {

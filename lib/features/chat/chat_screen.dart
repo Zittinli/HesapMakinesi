@@ -351,6 +351,8 @@ class _ChatScreenState extends State<ChatScreen> {
             if (mounted) Navigator.of(context).pop();
           }
         }
+      case 'report_user':
+        await _reportUser();
       case 'media':
         if (!mounted) return;
         await Navigator.of(context).push(
@@ -422,8 +424,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _reportMessage(ChatMessage message) async {
-    final reason = await showModalBottomSheet<ReportReason>(
+  Future<ReportReason?> _askReportReason() {
+    return showModalBottomSheet<ReportReason>(
       context: context,
       backgroundColor: const Color(0xFF161616),
       builder: (context) {
@@ -449,15 +451,47 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       },
     );
+  }
+
+  Future<void> _reportMessage(ChatMessage message) async {
+    final reason = await _askReportReason();
     if (reason == null || !mounted) return;
-    try {
-      await context.read<ModerationService>().reportMessage(
+    await _sendReport(
+      () => context.read<ModerationService>().reportMessage(
             message: message,
             chatId: widget.chatId,
             reportedUserId: message.senderId,
             reportedEmail: widget.otherUserName,
             reason: reason,
-          );
+          ),
+    );
+  }
+
+  Future<void> _reportUser() async {
+    if (widget.chatId.isEmpty || widget.otherUserId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bu kayit henuz aktif degil, kisi bildirilemez.'),
+        ),
+      );
+      return;
+    }
+
+    final reason = await _askReportReason();
+    if (reason == null || !mounted) return;
+    await _sendReport(
+      () => context.read<ModerationService>().reportUser(
+            chatId: widget.chatId,
+            reportedUserId: widget.otherUserId,
+            reportedEmail: widget.otherUserName,
+            reason: reason,
+          ),
+    );
+  }
+
+  Future<void> _sendReport(Future<void> Function() send) async {
+    try {
+      await send();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Bildirim gonderildi.')),
@@ -661,6 +695,13 @@ class _ChatScreenState extends State<ChatScreen> {
                               ? 'Engeli kaldir'
                               : 'Kisisi engelle',
                           style: const TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'report_user',
+                        child: Text(
+                          'Kisiyi bildir',
+                          style: TextStyle(color: Color(0xFFFFCC80)),
                         ),
                       ),
                       const PopupMenuItem(

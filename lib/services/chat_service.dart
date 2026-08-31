@@ -579,6 +579,7 @@ class ChatService {
         .collection('pendingByEmail')
         .doc(emailKey(email))
         .collection('inbox')
+        .where('recipientEmail', isEqualTo: email)
         .get();
 
     for (final thread in inbox.docs) {

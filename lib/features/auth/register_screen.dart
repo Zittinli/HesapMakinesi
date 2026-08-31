@@ -1,8 +1,10 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/registration_terms.dart';
 import '../../services/auth_service.dart';
+import '../../services/email_check_service.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -50,12 +52,37 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (mounted) {
         Navigator.of(context).pop();
       }
+    } on EmailCheckException catch (error) {
+      setState(() => _error = error.message);
+    } on FirebaseAuthException catch (error) {
+      setState(() => _error = _authErrorMessage(error));
     } catch (error) {
       setState(() => _error = 'Kayit basarisiz. Bilgilerinizi kontrol edin.');
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  String _authErrorMessage(FirebaseAuthException error) {
+    switch (error.code) {
+      case 'email-already-in-use':
+        return 'Bu e-posta zaten kayitli. Giris yapmayi deneyin.';
+      case 'invalid-email':
+        return 'E-posta adresi gecersiz gorunuyor.';
+      case 'weak-password':
+        return 'Sifre cok zayif. En az 6 karakter kullanin.';
+      case 'network-request-failed':
+        return 'Baglanti kurulamadi. Internetinizi kontrol edin.';
+      case 'too-many-requests':
+        return 'Cok fazla deneme yapildi. Biraz sonra tekrar deneyin.';
+      case 'operation-not-allowed':
+        return 'E-posta ile kayit su an kapali.';
+      default:
+        return error.message?.trim().isNotEmpty == true
+            ? error.message!
+            : 'Kayit basarisiz. Bilgilerinizi kontrol edin.';
     }
   }
 

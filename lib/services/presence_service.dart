@@ -57,10 +57,16 @@ class PresenceService with WidgetsBindingObserver {
     if (uid == null) return;
 
     final share = _settings?.lastSeenEnabled ?? true;
-    await _firestore.collection('users').doc(uid).update({
-      'isOnline': wantOnline && share,
-      'lastSeen': FieldValue.serverTimestamp(),
-      'shareLastSeen': share,
-    });
+    try {
+      await _firestore.collection('users').doc(uid).update({
+        'isOnline': wantOnline && share,
+        'lastSeen': FieldValue.serverTimestamp(),
+        'shareLastSeen': share,
+      });
+    } on FirebaseException catch (error) {
+      // Oturum kapanirken ya da kullanici belgesi henuz yokken yazma
+      // reddedilebilir; durum bilgisi kritik degil, uygulamayi dusurmemeli.
+      debugPrint('Presence yazilamadi: ${error.code}');
+    }
   }
 }

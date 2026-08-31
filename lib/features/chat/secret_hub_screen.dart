@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/admin_config.dart';
 import '../../core/chat_format.dart';
 import '../../core/ticking_builder.dart';
 import '../../models/chat_model.dart';
@@ -13,6 +14,7 @@ import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/settings_service.dart';
 import '../chat/chat_screen.dart';
+import '../settings/admin_home_screen.dart';
 import '../settings/settings_screen.dart';
 
 class SecretHubScreen extends StatefulWidget {
@@ -405,6 +407,21 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
           onPressed: widget.onExitToCalculator,
         ),
         actions: [
+          if (AdminConfig.isAdminEmail(myEmail))
+            IconButton(
+              tooltip: 'Yonetim',
+              icon: const Icon(Icons.shield_outlined, size: 22),
+              color: const Color(0xFFFFCC80),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => AdminHomeScreen(
+                      onExitToCalculator: widget.onExitToCalculator,
+                    ),
+                  ),
+                );
+              },
+            ),
           TextButton.icon(
             onPressed: () {
               Navigator.of(context).push(

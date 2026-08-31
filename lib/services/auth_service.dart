@@ -2,22 +2,28 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
+import '../core/admin_config.dart';
+import '../core/verification_policy.dart';
 import '../models/user_model.dart';
 import 'auth_log_service.dart';
 import 'chat_service.dart';
+import 'email_check_service.dart';
 
 class AuthService extends ChangeNotifier {
   AuthService({
     FirebaseAuth? auth,
     FirebaseFirestore? firestore,
     AuthLogService? authLog,
+    EmailCheckService? emailCheck,
   })  : _auth = auth ?? FirebaseAuth.instance,
         _firestore = firestore ?? FirebaseFirestore.instance,
-        _authLog = authLog ?? AuthLogService();
+        _authLog = authLog ?? AuthLogService(),
+        _emailCheck = emailCheck ?? EmailCheckService();
 
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
   final AuthLogService _authLog;
+  final EmailCheckService _emailCheck;
 
   User? get currentUser => _auth.currentUser;
 
@@ -33,7 +39,7 @@ class AuthService extends ChangeNotifier {
       await _ensureUserDocument();
       await _markLogin();
       await _authLog.log(type: 'sign_in', email: normalized);
-      if (!await requiresEmailOtp()) {
+      if (!requiresEmailVerification) {
         await _claimPending();
       }
       notifyListeners();
@@ -89,6 +95,8 @@ class AuthService extends ChangeNotifier {
       );
     }
 
+    await _emailCheck.ensureDeliverable(email);
+
     final credential = await _auth.createUserWithEmailAndPassword(
       email: email,
       password: password,
@@ -114,20 +122,49 @@ class AuthService extends ChangeNotifier {
 
     await _firestore.collection('users').doc(user.uid).set(appUser.toFirestore());
     await _authLog.log(type: 'sign_up', email: email.trim().toLowerCase());
+    try {
+      await user.sendEmailVerification();
+    } catch (error) {
+      debugPrint('Dogrulama e-postasi gonderilemedi: $error');
+    }
     notifyListeners();
   }
 
-  Future<bool> requiresEmailOtp() async {
+  bool get requiresEmailVerification {
     final user = _auth.currentUser;
     if (user == null) return false;
-    final snap = await _firestore.collection('users').doc(user.uid).get();
-    if (!snap.exists) return false;
-    return AppUser.fromFirestore(snap).needsEmailOtp;
+    if (AdminConfig.isAdminEmail(user.email)) return false;
+    if (VerificationPolicy.isExempt(user)) return false;
+    return !user.emailVerified;
   }
 
-  Future<void> completeEmailVerification() async {
-    await _claimPending();
-    notifyListeners();
+  Future<void> sendVerificationEmail() async {
+    final user = _auth.currentUser;
+    if (user == null || user.emailVerified) return;
+    await user.sendEmailVerification();
+    await _authLog.log(
+      type: 'otp_sent',
+      email: user.email ?? '',
+    );
+  }
+
+  /// Firebase'den taze kullanici bilgisini ceker ve dogrulanmissa
+  /// bekleyen mesajlari devralir.
+  Future<bool> refreshEmailVerified() async {
+    final user = _auth.currentUser;
+    if (user == null) return false;
+    await user.reload();
+    final refreshed = _auth.currentUser;
+    final verified = refreshed?.emailVerified == true;
+    if (verified) {
+      await _authLog.log(
+        type: 'otp_verified',
+        email: refreshed?.email ?? '',
+      );
+      await _claimPending();
+      notifyListeners();
+    }
+    return verified;
   }
 
   Future<void> deleteAccount(String password) async {

@@ -97,24 +97,77 @@ class ModerationService {
     if (user == null) return;
     if (message.senderId == user.uid) return;
 
-    final history = await _snapshotHistory(chatId, reportedMessageId: message.id);
+    await _createReport(
+      reporter: user,
+      chatId: chatId,
+      reportedUserId: reportedUserId,
+      reportedEmail: reportedEmail,
+      reason: reason,
+      messageId: message.id,
+      messageText: message.text,
+    );
+  }
+
+  /// Belirli bir mesaja bagli olmadan kisiyi bildirir. Kanit olarak
+  /// karsi tarafin son mesaji kullanilir, yoksa mesaj alanlari bos kalir.
+  Future<void> reportUser({
+    required String chatId,
+    required String reportedUserId,
+    required String reportedEmail,
+    required ReportReason reason,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+    if (reportedUserId == user.uid) return;
+
+    final history = await _snapshotHistory(chatId, reportedMessageId: '');
+    Map<String, dynamic>? lastFromReported;
+    for (final item in history) {
+      if ((item['senderId'] as String? ?? '') == reportedUserId) {
+        lastFromReported = item;
+      }
+    }
+
+    await _createReport(
+      reporter: user,
+      chatId: chatId,
+      reportedUserId: reportedUserId,
+      reportedEmail: reportedEmail,
+      reason: reason,
+      messageId: (lastFromReported?['messageId'] as String? ?? '').isEmpty
+          ? 'kisi-bildirimi'
+          : lastFromReported!['messageId'] as String,
+      messageText: lastFromReported?['text'] as String? ?? '',
+    );
+  }
+
+  Future<void> _createReport({
+    required User reporter,
+    required String chatId,
+    required String reportedUserId,
+    required String reportedEmail,
+    required ReportReason reason,
+    required String messageId,
+    required String messageText,
+  }) async {
+    final history = await _snapshotHistory(chatId, reportedMessageId: messageId);
     final transcript = _formatTranscript(
       history,
-      reporterId: user.uid,
+      reporterId: reporter.uid,
       reportedUserId: reportedUserId,
     );
 
     final reportRef = _reports.doc();
     await reportRef.set({
-      'reporterId': user.uid,
-      'reporterEmail': (user.email ?? '').toLowerCase(),
+      'reporterId': reporter.uid,
+      'reporterEmail': (reporter.email ?? '').toLowerCase(),
       'reportedUserId': reportedUserId,
       'reportedEmail': reportedEmail.trim().toLowerCase(),
       'chatId': chatId,
-      'messageId': message.id,
-      'messageText': message.text.length > 4000
-          ? message.text.substring(0, 4000)
-          : message.text,
+      'messageId': messageId,
+      'messageText': messageText.length > 4000
+          ? messageText.substring(0, 4000)
+          : messageText,
       'reason': reason.name,
       'status': 'pending',
       'action': '',

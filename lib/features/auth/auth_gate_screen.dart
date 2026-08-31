@@ -13,7 +13,7 @@ import '../../services/settings_service.dart';
 import '../../models/user_model.dart';
 import '../chat/secret_hub_screen.dart';
 import '../settings/admin_home_screen.dart';
-import 'email_code_screen.dart';
+import 'email_verify_screen.dart';
 import 'login_screen.dart';
 import 'restricted_screen.dart';
 
@@ -51,7 +51,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final authService = context.read<AuthService>();
+    final authService = context.watch<AuthService>();
 
     return StreamBuilder<User?>(
       stream: authService.authStateChanges(),
@@ -82,14 +82,11 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
                 ),
               );
             }
-            final profile = userSnap.data;
-            final needsOtp = profile?.needsEmailOtp == true &&
-                !AdminConfig.isAdminEmail(user.email);
-            if (needsOtp) {
+            if (authService.requiresEmailVerification) {
               _presenceService?.stop();
               _presenceService = null;
               context.read<NotificationService>().setHubOpen(false);
-              return const EmailCodeScreen();
+              return const EmailVerifyScreen();
             }
 
             _presenceService ??= PresenceService(
