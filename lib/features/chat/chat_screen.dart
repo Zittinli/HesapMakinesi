@@ -58,6 +58,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Stream<ChatRoom?>? _chatStream;
   Stream<List<ChatMessage>>? _messagesStream;
   Stream<AppUser?>? _otherUserStream;
+  ChatService? _chatService;
+  SettingsService? _settingsService;
+  String? _myUid;
 
   static const _ttlOptions = <int?>[null, 10, 60];
 
@@ -66,7 +69,10 @@ class _ChatScreenState extends State<ChatScreen> {
     super.didChangeDependencies();
     final authService = context.read<AuthService>();
     final chatService = context.read<ChatService>();
+    _chatService = chatService;
+    _settingsService = context.read<SettingsService>();
     final uid = authService.currentUser!.uid;
+    _myUid = uid;
     final myEmail = authService.currentUser?.email ?? '';
     _prefsStream ??= chatService.watchChatPrefs(uid);
     if (widget.chatId.isNotEmpty) {
@@ -123,16 +129,17 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _setTyping(bool typing) async {
-    if (!mounted || widget.chatId.isEmpty) return;
-    final uid = context.read<AuthService>().currentUser?.uid;
-    if (uid == null) return;
-    final allowed = context.read<SettingsService>().typingEnabled;
+    if (widget.chatId.isEmpty) return;
+    final uid = _myUid;
+    final chatService = _chatService;
+    if (uid == null || chatService == null) return;
+    final allowed = _settingsService?.typingEnabled ?? false;
     try {
-      await context.read<ChatService>().setTyping(
-            chatId: widget.chatId,
-            userId: uid,
-            typing: typing && allowed,
-          );
+      await chatService.setTyping(
+        chatId: widget.chatId,
+        userId: uid,
+        typing: typing && allowed,
+      );
     } catch (_) {}
   }
 
@@ -168,8 +175,8 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _replyTo = null);
 
     try {
-      final currentUserId = context.read<AuthService>().currentUser!.uid;
-      final chatService = context.read<ChatService>();
+      final currentUserId = _myUid!;
+      final chatService = _chatService!;
       if (widget.chatId.isEmpty && (widget.pendingEmail ?? '').isNotEmpty) {
         await chatService.sendPendingText(
           senderId: currentUserId,
