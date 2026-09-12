@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/secret_config.dart';
+import '../core/theme/calculator_palette.dart';
 import '../models/notification_look.dart';
 
 class SettingsService extends ChangeNotifier {
@@ -16,6 +17,8 @@ class SettingsService extends ChangeNotifier {
   static const _keyTyping = 'privacy_typing';
   static const _keyReadReceipts = 'privacy_read_receipts';
   static const _keyLastSeen = 'privacy_last_seen';
+  static const _keyTheme = 'calculator_theme';
+  static const _keyHistory = 'calculator_history';
 
   static const allowedOperators = ['×', '+', '-', '÷'];
 
@@ -28,6 +31,8 @@ class SettingsService extends ChangeNotifier {
   bool _typingEnabled = true;
   bool _readReceiptsEnabled = true;
   bool _lastSeenEnabled = true;
+  CalculatorSkin _calculatorSkin = CalculatorSkin.classic;
+  List<String> _calculatorHistory = [];
   bool _ready = false;
 
   String get unlockLeft => _unlockLeft;
@@ -40,6 +45,8 @@ class SettingsService extends ChangeNotifier {
   bool get typingEnabled => _typingEnabled;
   bool get readReceiptsEnabled => _readReceiptsEnabled;
   bool get lastSeenEnabled => _lastSeenEnabled;
+  CalculatorSkin get calculatorSkin => _calculatorSkin;
+  List<String> get calculatorHistory => List.unmodifiable(_calculatorHistory);
   bool get ready => _ready;
 
   Future<void> load() async {
@@ -59,6 +66,8 @@ class SettingsService extends ChangeNotifier {
     _typingEnabled = prefs.getBool(_keyTyping) ?? true;
     _readReceiptsEnabled = prefs.getBool(_keyReadReceipts) ?? true;
     _lastSeenEnabled = prefs.getBool(_keyLastSeen) ?? true;
+    _calculatorSkin = CalculatorSkinX.fromId(prefs.getString(_keyTheme));
+    _calculatorHistory = prefs.getStringList(_keyHistory) ?? [];
     _ready = true;
     notifyListeners();
   }
@@ -123,6 +132,21 @@ class SettingsService extends ChangeNotifier {
     _readReceiptsEnabled = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyReadReceipts, value);
+    notifyListeners();
+  }
+
+  Future<void> setCalculatorSkin(CalculatorSkin skin) async {
+    if (!skin.available) return;
+    _calculatorSkin = skin;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyTheme, skin.id);
+    notifyListeners();
+  }
+
+  Future<void> setCalculatorHistory(List<String> items) async {
+    _calculatorHistory = items.take(50).toList();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_keyHistory, _calculatorHistory);
     notifyListeners();
   }
 

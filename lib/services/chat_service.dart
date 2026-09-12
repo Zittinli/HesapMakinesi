@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/chat_model.dart';
 import '../models/chat_pref_model.dart';
 import '../models/message_model.dart';
+import '../core/search_tokens.dart';
 import '../models/pending_thread_model.dart';
 
 class ChatBlockedException implements Exception {
@@ -201,6 +202,92 @@ class ChatService {
     await _sendMessage(chatId, message, preview: trimmed);
   }
 
+  Future<void> sendMediaMessage({
+    required String chatId,
+    required String senderId,
+    required String mediaUrl,
+    required MessageType type,
+    ChatMessage? replyTo,
+    int? expireSeconds,
+  }) async {
+    final chatSnap = await _chats.doc(chatId).get();
+    final chat = chatSnap.exists ? ChatRoom.fromFirestore(chatSnap) : null;
+    if (chat != null && chat.isBlocked()) {
+      throw const ChatBlockedException();
+    }
+    final expiresAt = expireSeconds == null
+        ? null
+        : DateTime.now().add(Duration(seconds: expireSeconds));
+    final label = type == MessageType.video ? 'Video' : 'Fotograf';
+    final message = ChatMessage(
+      id: '',
+      senderId: senderId,
+      text: label,
+      type: type,
+      mediaUrl: mediaUrl,
+      createdAt: DateTime.now(),
+      readBy: [senderId],
+      replyToId: replyTo?.id,
+      replyToText: _clip(replyTo?.text, 400),
+      replyToSenderId: replyTo?.senderId,
+      expiresAt: expiresAt,
+      expireSeconds: expireSeconds,
+    );
+    await _sendMessage(chatId, message, preview: label);
+  }
+
+  Future<List<ChatMessage>> searchMessagesInChat({
+    required String chatId,
+    required String query,
+  }) async {
+    if (chatId.isEmpty || query.trim().isEmpty) return const [];
+    final words = SearchTokens.wordsOf(query);
+    if (words.isEmpty) return const [];
+    Query<Map<String, dynamic>> ref =
+        _chats.doc(chatId).collection('messages').orderBy('createdAt');
+    try {
+      final indexed = await _chats
+          .doc(chatId)
+          .collection('messages')
+          .where('tokens', arrayContains: words.first)
+          .orderBy('createdAt')
+          .limit(80)
+          .get();
+      return indexed.docs
+          .map(ChatMessage.fromFirestore)
+          .where((item) => SearchTokens.matches(item.preview, query))
+          .toList();
+    } catch (_) {
+      final fallback = await ref.limit(250).get();
+      return fallback.docs
+          .map(ChatMessage.fromFirestore)
+          .where((item) => SearchTokens.matches(item.preview, query))
+          .toList();
+    }
+  }
+
+  Future<List<({ChatRoom chat, ChatMessage message})>> searchAllChats({
+    required String userId,
+    required String query,
+  }) async {
+    if (query.trim().isEmpty) return const [];
+    final chats = await _chats.where('participants', arrayContains: userId).get();
+    final hits = <({ChatRoom chat, ChatMessage message})>[];
+    for (final doc in chats.docs) {
+      final chat = ChatRoom.fromFirestore(doc);
+      final messages = await searchMessagesInChat(chatId: chat.id, query: query);
+      for (final message in messages) {
+        hits.add((chat: chat, message: message));
+      }
+    }
+    hits.sort((a, b) {
+      final at = a.message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = b.message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bt.compareTo(at);
+    });
+    return hits.take(80).toList();
+  }
+
   Future<void> _sendMessage(
     String chatId,
     ChatMessage message, {
@@ -387,6 +474,7 @@ class ChatService {
     await ref.update({
       'text': trimmed,
       'editedAt': FieldValue.serverTimestamp(),
+      'tokens': SearchTokens.fromText(trimmed),
     });
 
     try {
@@ -534,6 +622,49 @@ class ChatService {
       'lastMessageAt': FieldValue.serverTimestamp(),
     };
 
+    final batch = _firestore.batch();
+    batch.set(messageRef, message.toFirestore());
+    batch.set(inboxRef, meta, SetOptions(merge: true));
+    batch.set(sentRef, meta, SetOptions(merge: true));
+    await batch.commit();
+  }
+
+  Future<void> sendPendingMedia({
+    required String senderId,
+    required String recipientEmail,
+    required String mediaUrl,
+    required MessageType type,
+    ChatMessage? replyTo,
+    int? expireSeconds,
+  }) async {
+    final email = recipientEmail.trim().toLowerCase();
+    final expiresAt = expireSeconds == null
+        ? null
+        : DateTime.now().add(Duration(seconds: expireSeconds));
+    final label = type == MessageType.video ? 'Video' : 'Fotograf';
+    final message = ChatMessage(
+      id: '',
+      senderId: senderId,
+      text: label,
+      type: type,
+      mediaUrl: mediaUrl,
+      createdAt: DateTime.now(),
+      readBy: [senderId],
+      replyToId: replyTo?.id,
+      replyToText: _clip(replyTo?.text, 400),
+      replyToSenderId: replyTo?.senderId,
+      expiresAt: expiresAt,
+      expireSeconds: expireSeconds,
+    );
+    final inboxRef = _pendingInbox(recipientEmail: email, senderId: senderId);
+    final sentRef = _pendingSent(senderId).doc(emailKey(email));
+    final messageRef = inboxRef.collection('messages').doc();
+    final meta = {
+      'recipientEmail': email,
+      'senderId': senderId,
+      'lastMessage': label,
+      'lastMessageAt': FieldValue.serverTimestamp(),
+    };
     final batch = _firestore.batch();
     batch.set(messageRef, message.toFirestore());
     batch.set(inboxRef, meta, SetOptions(merge: true));

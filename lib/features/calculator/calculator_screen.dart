@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/theme/calculator_theme.dart';
+import '../../core/theme/calculator_palette.dart';
 import '../../services/settings_service.dart';
 import 'calculator_controller.dart';
 
@@ -37,6 +37,12 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
   void initState() {
     super.initState();
     _controller = CalculatorController();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        final settings = context.read<SettingsService>();
+        _controller.loadHistory(settings.calculatorHistory);
+      } catch (_) {}
+    });
   }
 
   @override
@@ -58,7 +64,11 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       );
       if (unlocked) {
         widget.onSecretUnlock();
+        return;
       }
+      try {
+        context.read<SettingsService>().setCalculatorHistory(_controller.history);
+      } catch (_) {}
       return;
     }
     _controller.onButtonPressed(label);
@@ -66,14 +76,50 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    SettingsService? settings;
+    try {
+      settings = context.watch<SettingsService>();
+    } catch (_) {}
+    final palette = CalculatorPalette.of(
+      settings?.calculatorSkin ?? CalculatorSkin.classic,
+    );
+
     return Scaffold(
-      backgroundColor: CalculatorTheme.background,
+      backgroundColor: palette.background,
       body: SafeArea(
         child: OrientationBuilder(
           builder: (context, orientation) {
             final landscape = orientation == Orientation.landscape;
             return Column(
               children: [
+                ListenableBuilder(
+                  listenable: _controller,
+                  builder: (context, _) {
+                    if (_controller.history.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return SizedBox(
+                    height: landscape ? 36 : 48,
+                    child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          children: [
+                            for (final line in _controller.history.take(12))
+                              Padding(
+                                padding: const EdgeInsets.only(right: 12, top: 8),
+                                child: Text(
+                                  line,
+                                  style: TextStyle(
+                                    color: palette.historyText,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                    );
+                  },
+                ),
                 Expanded(
                   flex: landscape ? 2 : 2,
                   child: ListenableBuilder(
@@ -105,7 +151,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                                     _controller.expressionDisplay,
                                     textAlign: TextAlign.right,
                                     style: TextStyle(
-                                      color: CalculatorTheme.displayText
+                                      color: palette.displayText
                                           .withValues(alpha: 0.5),
                                       fontSize: landscape ? 18 : 28,
                                       fontWeight: FontWeight.w300,
@@ -116,7 +162,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                                 _controller.display,
                                 textAlign: TextAlign.right,
                                 style: TextStyle(
-                                  color: CalculatorTheme.displayText,
+                                  color: palette.displayText,
                                   fontSize: landscape ? 42 : 72,
                                   fontWeight: FontWeight.w300,
                                   height: 1.1,
@@ -143,7 +189,11 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                             for (final row in rows)
                               Expanded(
                                 child: Row(
-                                  children: _buildRow(row, compact: landscape),
+                                  children: _buildRow(
+                                  row,
+                                  compact: landscape,
+                                  palette: palette,
+                                ),
                                 ),
                               ),
                           ],
@@ -160,7 +210,11 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     );
   }
 
-  List<Widget> _buildRow(List<String> labels, {required bool compact}) {
+  List<Widget> _buildRow(
+    List<String> labels, {
+    required bool compact,
+    required CalculatorPalette palette,
+  }) {
     return [
       for (final label in labels)
         Expanded(
@@ -172,6 +226,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                   ? (_controller.useDegrees ? 'Deg' : 'Rad')
                   : label,
               compact: compact,
+              palette: palette,
               onPressed: () => _handlePress(label == 'Rad' ? 'Deg' : label),
             ),
           ),
@@ -184,11 +239,13 @@ class _CalcButton extends StatelessWidget {
   const _CalcButton({
     required this.label,
     required this.onPressed,
+    required this.palette,
     this.compact = false,
   });
 
   final String label;
   final VoidCallback onPressed;
+  final CalculatorPalette palette;
   final bool compact;
 
   static const _operators = {'+', '-', '×', '÷', '=', 'xʸ'};
@@ -203,14 +260,14 @@ class _CalcButton extends StatelessWidget {
     final Color textColor;
 
     if (isOperator) {
-      background = CalculatorTheme.buttonOrange;
-      textColor = CalculatorTheme.buttonOrangeText;
+      background = palette.buttonOrange;
+      textColor = palette.buttonOrangeText;
     } else if (isFunction) {
-      background = CalculatorTheme.buttonLight;
-      textColor = CalculatorTheme.buttonLightText;
+      background = palette.buttonLight;
+      textColor = palette.buttonLightText;
     } else {
-      background = CalculatorTheme.buttonDark;
-      textColor = CalculatorTheme.displayText;
+      background = palette.buttonDark;
+      textColor = palette.displayText;
     }
 
     return Material(

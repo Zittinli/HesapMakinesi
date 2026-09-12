@@ -259,6 +259,57 @@ class AuthService extends ChangeNotifier {
     } catch (_) {}
   }
 
+  Future<void> updateDisplayName(String name) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw FirebaseAuthException(
+        code: 'no-user',
+        message: 'Oturum bulunamadi.',
+      );
+    }
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed.length > 80) {
+      throw FirebaseAuthException(
+        code: 'invalid-name',
+        message: 'Gorunen ad 1-80 karakter olmali.',
+      );
+    }
+    final doc = _firestore.collection('users').doc(user.uid);
+    final snapshot = await doc.get();
+    if (!snapshot.exists) {
+      throw FirebaseAuthException(
+        code: 'no-profile',
+        message: 'Profil bulunamadi.',
+      );
+    }
+    final profile = AppUser.fromFirestore(snapshot);
+    final cooldown = profile.displayNameCooldown;
+    if (cooldown != null) {
+      final minutes = cooldown.inMinutes + 1;
+      throw FirebaseAuthException(
+        code: 'name-cooldown',
+        message: 'Gorunen ad $minutes dakika sonra degistirilebilir.',
+      );
+    }
+    await doc.update({
+      'displayName': trimmed,
+      'displayNameChangedAt': FieldValue.serverTimestamp(),
+    });
+    notifyListeners();
+  }
+
+  Stream<List<AppUser>> watchAllUsers() {
+    return _firestore.collection('users').snapshots().map((snapshot) {
+      final users = snapshot.docs.map(AppUser.fromFirestore).toList();
+      users.sort((a, b) {
+        final at = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bt = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bt.compareTo(at);
+      });
+      return users;
+    });
+  }
+
   Stream<AppUser?> watchUser(String userId) {
     return _firestore.collection('users').doc(userId).snapshots().map((doc) {
       if (!doc.exists) return null;

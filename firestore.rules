@@ -192,7 +192,8 @@ service cloud.firestore {
           'shareLastSeen',
           'acceptedTermsAt',
           'emailOtpVerified',
-          'lastLoginAt'
+          'lastLoginAt',
+          'displayNameChangedAt'
         ])
         && isValidEmail(data.email)
         && data.displayName is string
@@ -204,7 +205,8 @@ service cloud.firestore {
         && (!('shareLastSeen' in data) || data.shareLastSeen is bool)
         && (!('acceptedTermsAt' in data) || data.acceptedTermsAt == null || data.acceptedTermsAt is timestamp)
         && (!('emailOtpVerified' in data) || data.emailOtpVerified is bool)
-        && (!('lastLoginAt' in data) || data.lastLoginAt == null || data.lastLoginAt is timestamp);
+        && (!('lastLoginAt' in data) || data.lastLoginAt == null || data.lastLoginAt is timestamp)
+        && (!('displayNameChangedAt' in data) || data.displayNameChangedAt == null || data.displayNameChangedAt is timestamp);
     }
 
     function isValidAuthEvent(data) {
@@ -302,6 +304,8 @@ service cloud.firestore {
           'senderId',
           'text',
           'type',
+          'mediaUrl',
+          'tokens',
           'createdAt',
           'readBy',
           'replyToId',
@@ -318,7 +322,9 @@ service cloud.firestore {
         && data.senderId.size() <= 128
         && data.text is string
         && data.text.size() <= 4000
-        && data.type == 'text'
+        && data.type in ['text', 'image', 'video']
+        && (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 2000))
+        && (!('tokens' in data) || (data.tokens is list && data.tokens.size() <= 40))
         && (data.createdAt == null || data.createdAt is timestamp)
         && isValidUidList(data.readBy, 4)
         && (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is timestamp)
@@ -382,7 +388,7 @@ service cloud.firestore {
         && request.resource.data.deletedForEveryone == true
         && request.resource.data.text == ''
         && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['deletedForEveryone', 'text']);
+          .hasOnly(['deletedForEveryone', 'text', 'mediaUrl']);
     }
 
     function senderEditUpdate() {
@@ -393,7 +399,7 @@ service cloud.firestore {
         && request.resource.data.text.size() <= 4000
         && request.resource.data.editedAt is timestamp
         && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['text', 'editedAt']);
+          .hasOnly(['text', 'editedAt', 'tokens']);
     }
 
     match /users/{userId} {
@@ -436,6 +442,10 @@ service cloud.firestore {
           && blockedUserId != userId
           && isValidBlocked(request.resource.data);
         allow delete: if isSelf(userId);
+      }
+
+      match /fcmTokens/{tokenId} {
+        allow read, write: if isSelf(userId);
       }
 
       match /pendingSent/{emailKey} {
@@ -539,7 +549,8 @@ service cloud.firestore {
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 4000
-          && request.resource.data.type == 'text'
+          && isValidMessage(request.resource.data)
+          && request.resource.data.type in ['text', 'image', 'video']
           && (request.resource.data.createdAt == null
             || request.resource.data.createdAt is timestamp)
           && (

@@ -1,4 +1,6 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../core/chat_format.dart';
 import '../../core/ticking_builder.dart';
@@ -61,10 +63,26 @@ class MessageBubble extends StatelessWidget {
                     style: const TextStyle(color: Colors.white54, fontSize: 12),
                   ),
                 ),
-              Text(
-                message.text,
-                style: const TextStyle(color: Colors.white, fontSize: 15),
-              ),
+              if (message.hasMedia)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: message.type == MessageType.video
+                      ? _VideoThumb(url: message.mediaUrl!)
+                      : ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: CachedNetworkImage(
+                            imageUrl: message.mediaUrl!,
+                            width: 180,
+                            height: 180,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                )
+              else
+                Text(
+                  message.text,
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                ),
               const SizedBox(height: 4),
               TickingBuilder(
                 builder: (_) {
@@ -117,6 +135,67 @@ class MessageBubble extends StatelessWidget {
                   );
                 },
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VideoThumb extends StatefulWidget {
+  const _VideoThumb({required this.url});
+  final String url;
+
+  @override
+  State<_VideoThumb> createState() => _VideoThumbState();
+}
+
+class _VideoThumbState extends State<_VideoThumb> {
+  VideoPlayerController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    final player = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    _controller = player;
+    player.initialize().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final player = _controller;
+    if (player == null || !player.value.isInitialized) {
+      return const SizedBox(
+        width: 180,
+        height: 120,
+        child: Center(child: CircularProgressIndicator(color: Colors.white24)),
+      );
+    }
+    return GestureDetector(
+      onTap: () {
+        player.value.isPlaying ? player.pause() : player.play();
+        setState(() {});
+      },
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: SizedBox(
+          width: 180,
+          height: 140,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              VideoPlayer(player),
+              if (!player.value.isPlaying)
+                const Icon(Icons.play_circle, color: Colors.white70, size: 40),
             ],
           ),
         ),

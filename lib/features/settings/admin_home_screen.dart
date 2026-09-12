@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/chat_format.dart';
 import '../../models/auth_event_model.dart';
+import '../../models/user_model.dart';
 import '../../services/auth_log_service.dart';
 import '../../services/auth_service.dart';
 import '../chat/secret_hub_screen.dart';
@@ -19,7 +20,7 @@ class AdminHomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         backgroundColor: const Color(0xFF0B0B0B),
         appBar: AppBar(
@@ -64,6 +65,7 @@ class AdminHomeScreen extends StatelessWidget {
             tabs: [
               Tab(text: 'Bildirilenler'),
               Tab(text: 'Girisler'),
+              Tab(text: 'Kullanicilar'),
             ],
           ),
         ),
@@ -71,6 +73,7 @@ class AdminHomeScreen extends StatelessWidget {
           children: [
             AdminReportsList(),
             _AuthEventsList(),
+            _UsersList(),
           ],
         ),
       ),
@@ -139,9 +142,70 @@ class _AuthEventsList extends StatelessWidget {
                 ),
               ),
               trailing: Text(
-                ChatFormat.listTime(event.createdAt),
-                style: const TextStyle(color: Colors.white30, fontSize: 12),
+                ChatFormat.eventDateTime(event.createdAt),
+                style: const TextStyle(color: Colors.white30, fontSize: 11),
               ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _UsersList extends StatelessWidget {
+  const _UsersList();
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<AppUser>>(
+      stream: context.read<AuthService>().watchAllUsers(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(
+            child: Text(
+              'Kullanicilar okunamadi.\n${snapshot.error}',
+              style: const TextStyle(color: Colors.white38),
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
+        if (!snapshot.hasData) {
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white24),
+          );
+        }
+        final users = snapshot.data!;
+        if (users.isEmpty) {
+          return const Center(
+            child: Text(
+              'Henuz kullanici yok.',
+              style: TextStyle(color: Colors.white38),
+            ),
+          );
+        }
+        return ListView.separated(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          itemCount: users.length,
+          separatorBuilder: (_, __) =>
+              const Divider(color: Color(0xFF222222), height: 1),
+          itemBuilder: (context, index) {
+            final user = users[index];
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                user.visibleName,
+                style: const TextStyle(color: Colors.white70, fontSize: 14),
+              ),
+              subtitle: Text(
+                [
+                  user.email,
+                  if (user.createdAt != null)
+                    'Kayit: ${ChatFormat.eventDateTime(user.createdAt)}',
+                ].join('\n'),
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+              isThreeLine: user.createdAt != null,
             );
           },
         );

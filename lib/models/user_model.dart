@@ -11,6 +11,7 @@ class AppUser {
     this.shareLastSeen = true,
     this.acceptedTermsAt,
     this.emailOtpVerified = false,
+    this.displayNameChangedAt,
   });
 
   final String id;
@@ -22,6 +23,17 @@ class AppUser {
   final bool shareLastSeen;
   final DateTime? acceptedTermsAt;
   final bool emailOtpVerified;
+  final DateTime? displayNameChangedAt;
+
+  String get visibleName =>
+      displayName.trim().isNotEmpty ? displayName.trim() : email;
+
+  Duration? get displayNameCooldown {
+    final last = displayNameChangedAt;
+    if (last == null) return null;
+    final left = last.add(const Duration(hours: 1)).difference(DateTime.now());
+    return left.isNegative ? null : left;
+  }
 
   bool get needsEmailOtp {
     if (emailOtpVerified) return false;
@@ -40,6 +52,8 @@ class AppUser {
       shareLastSeen: data['shareLastSeen'] as bool? ?? true,
       acceptedTermsAt: (data['acceptedTermsAt'] as Timestamp?)?.toDate(),
       emailOtpVerified: data['emailOtpVerified'] as bool? ?? false,
+      displayNameChangedAt:
+          (data['displayNameChangedAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -54,6 +68,8 @@ class AppUser {
       if (acceptedTermsAt != null)
         'acceptedTermsAt': Timestamp.fromDate(acceptedTermsAt!),
       'emailOtpVerified': emailOtpVerified,
+      if (displayNameChangedAt != null)
+        'displayNameChangedAt': Timestamp.fromDate(displayNameChangedAt!),
     };
   }
 }

@@ -14,29 +14,38 @@ class ChatFormat {
 
   static String listTime(DateTime? time) {
     if (time == null) return '';
+    final local = time.toLocal();
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(time.year, time.month, time.day);
+    final day = DateTime(local.year, local.month, local.day);
     final diff = today.difference(day).inDays;
-    if (diff == 0) return DateFormat('HH:mm').format(time);
-    if (diff == 1) return 'Dün';
-    if (time.year == now.year) return DateFormat('dd.MM').format(time);
-    return DateFormat('dd.MM.yy').format(time);
+    if (diff == 0) return DateFormat('HH:mm').format(local);
+    if (diff == 1) return 'Dün ${DateFormat('HH:mm').format(local)}';
+    if (local.year == now.year) {
+      return DateFormat('dd.MM HH:mm').format(local);
+    }
+    return DateFormat('dd.MM.yy HH:mm').format(local);
   }
 
   static String dayLabel(DateTime time) {
+    final local = time.toLocal();
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(time.year, time.month, time.day);
+    final day = DateTime(local.year, local.month, local.day);
     final diff = today.difference(day).inDays;
     if (diff == 0) return 'Bugün';
     if (diff == 1) return 'Dün';
-    return DateFormat('dd.MM.yyyy').format(time);
+    return DateFormat('dd.MM.yyyy').format(local);
   }
 
   static String messageTime(DateTime? time) {
     if (time == null) return '';
-    return DateFormat('HH:mm').format(time);
+    return DateFormat('HH:mm').format(time.toLocal());
+  }
+
+  static String eventDateTime(DateTime? time) {
+    if (time == null) return '';
+    return DateFormat('dd.MM.yyyy HH:mm').format(time.toLocal());
   }
 
   static String lastSeenLabel(
@@ -46,19 +55,20 @@ class ChatFormat {
   }) {
     if (isOnline) return 'Aktif';
     if (time == null) return '';
+    final local = time.toLocal();
     final current = now ?? DateTime.now();
-    final minutes = current.difference(time).inMinutes;
+    final minutes = current.difference(local).inMinutes;
     if (minutes < 2) return 'Son aktif: az once';
     final today = DateTime(current.year, current.month, current.day);
-    final day = DateTime(time.year, time.month, time.day);
+    final day = DateTime(local.year, local.month, local.day);
     final diff = today.difference(day).inDays;
-    final clock = DateFormat('HH:mm').format(time);
+    final clock = DateFormat('HH:mm').format(local);
     if (diff == 0) return 'Son gorulme: $clock';
     if (diff == 1) return 'Son gorulme: Dün $clock';
-    if (time.year == current.year) {
-      return 'Son gorulme: ${DateFormat('dd.MM').format(time)} $clock';
+    if (local.year == current.year) {
+      return 'Son gorulme: ${DateFormat('dd.MM').format(local)} $clock';
     }
-    return 'Son gorulme: ${DateFormat('dd.MM.yy').format(time)} $clock';
+    return 'Son gorulme: ${DateFormat('dd.MM.yy').format(local)} $clock';
   }
 
   static bool isSameDay(DateTime? a, DateTime? b) {

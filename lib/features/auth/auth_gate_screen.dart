@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/admin_config.dart';
 import '../../models/moderation_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/moderation_service.dart';
@@ -12,7 +11,6 @@ import '../../services/presence_service.dart';
 import '../../services/settings_service.dart';
 import '../../models/user_model.dart';
 import '../chat/secret_hub_screen.dart';
-import '../settings/admin_home_screen.dart';
 import 'email_verify_screen.dart';
 import 'login_screen.dart';
 import 'restricted_screen.dart';
@@ -107,10 +105,6 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
       _presenceService?.stop();
       _presenceService = null;
       Navigator.of(context).popUntil((route) => route.isFirst);
-    }
-
-    if (AdminConfig.isAdminEmail(user.email)) {
-      return AdminHomeScreen(onExitToCalculator: exitToCalculator);
     }
 
     final hub = SecretHubScreen(onExitToCalculator: exitToCalculator);

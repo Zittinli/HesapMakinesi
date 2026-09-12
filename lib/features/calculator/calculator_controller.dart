@@ -24,9 +24,22 @@ class CalculatorController extends ChangeNotifier {
   String? _pendingOperator;
   bool _waitingForOperand = false;
   bool _useDegrees = true;
+  final List<String> _history = [];
 
   String get display => _display;
   bool get useDegrees => _useDegrees;
+  List<String> get history => List.unmodifiable(_history);
+
+  void loadHistory(List<String> items) {
+    _history
+      ..clear()
+      ..addAll(items.take(50));
+  }
+
+  void clearHistory() {
+    _history.clear();
+    notifyListeners();
+  }
 
   /// Ekranda gorunen ifade: ornegin `12 +` veya `12 + 5`.
   String get expressionDisplay {
@@ -132,7 +145,14 @@ class CalculatorController extends ChangeNotifier {
       return true;
     }
 
+    final expression = expressionDisplay;
     _calculate();
+    if (_display != 'Hata' && expression != _display) {
+      _history.insert(0, '$expression = $_display');
+      if (_history.length > 50) {
+        _history.removeLast();
+      }
+    }
     notifyListeners();
     return false;
   }

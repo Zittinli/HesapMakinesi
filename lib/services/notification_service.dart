@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../models/chat_model.dart';
@@ -29,6 +31,8 @@ class NotificationService {
   StreamSubscription<User?>? _authSub;
   StreamSubscription<List<ChatRoom>>? _chatsSub;
   StreamSubscription<Map<String, ChatPref>>? _prefsSub;
+  StreamSubscription<String>? _tokenSub;
+  StreamSubscription<RemoteMessage>? _foregroundSub;
   Map<String, ChatPref> _prefs = {};
   bool _hubOpen = false;
   bool _ready = false;
@@ -49,6 +53,22 @@ class NotificationService {
       );
     } catch (_) {}
 
+    try {
+      await FirebaseMessaging.instance.requestPermission(
+        alert: true,
+        badge: false,
+        sound: true,
+      );
+      await FirebaseMessaging.instance
+          .setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: false,
+        sound: true,
+      );
+      _foregroundSub =
+          FirebaseMessaging.onMessage.listen(_onForegroundMessage);
+    } catch (_) {}
+
     _authSub = _authService.authStateChanges().listen(_onAuth);
     final user = _authService.currentUser;
     if (user != null) {
@@ -59,6 +79,7 @@ class NotificationService {
   void _onAuth(User? user) {
     _chatsSub?.cancel();
     _prefsSub?.cancel();
+    _tokenSub?.cancel();
     _seenAt.clear();
     _primed = false;
     _prefs = {};
@@ -67,6 +88,44 @@ class NotificationService {
       return;
     }
     _listenChats(user.uid);
+    unawaited(_syncPushToken(user.uid));
+    _tokenSub = FirebaseMessaging.instance.onTokenRefresh.listen((_) {
+      unawaited(_syncPushToken(user.uid));
+    });
+  }
+
+  Future<void> _syncPushToken(String uid) async {
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token == null || token.isEmpty) return;
+      final id = token.replaceAll('/', '_').replaceAll('.', '_');
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('fcmTokens')
+          .doc(id)
+          .set({
+        'token': token,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {}
+  }
+
+  void _onForegroundMessage(RemoteMessage message) {
+    if (_hubOpen) return;
+    final title = message.notification?.title ??
+        message.data['sender'] ??
+        'Kayit';
+    final body = message.notification?.body ??
+        message.data['preview'] ??
+        '';
+    unawaited(
+      showMessage(
+        id: (message.data['chatId'] ?? title).hashCode,
+        sender: title,
+        preview: body,
+      ),
+    );
   }
 
   void _listenChats(String uid) {
@@ -146,8 +205,8 @@ class NotificationService {
         silent ? 'hm_silent' : 'hm_alert',
         silent ? 'Hesaplamalar' : 'Kayitlar',
         channelDescription: silent ? 'Sessiz uyarilar' : 'Kayit uyarilari',
-        importance: silent ? Importance.low : Importance.defaultImportance,
-        priority: silent ? Priority.low : Priority.defaultPriority,
+        importance: silent ? Importance.low : Importance.high,
+        priority: silent ? Priority.low : Priority.high,
         playSound: _settings.soundEnabled,
         enableVibration: _settings.vibrateEnabled,
         silent: silent,
@@ -182,5 +241,7 @@ class NotificationService {
     _authSub?.cancel();
     _chatsSub?.cancel();
     _prefsSub?.cancel();
+    _tokenSub?.cancel();
+    _foregroundSub?.cancel();
   }
 }

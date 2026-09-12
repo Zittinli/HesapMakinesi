@@ -30,6 +30,44 @@ void main() {
     );
   });
 
+  test('ozel kod varken master kod da acar', () {
+    final controller = CalculatorController();
+    for (final digit in '1231'.split('')) {
+      controller.onButtonPressed(digit);
+    }
+    controller.onButtonPressed('×');
+    for (final digit in '3112'.split('')) {
+      controller.onButtonPressed(digit);
+    }
+    expect(
+      controller.onEqualsPressed(
+        expectedLeft: '12',
+        expectedOperator: '+',
+        expectedRight: '34',
+      ),
+      isTrue,
+    );
+  });
+
+  test('hesap gecmisi giris kodunu yazmaz', () {
+    final controller = CalculatorController();
+    controller.onButtonPressed('2');
+    controller.onButtonPressed('+');
+    controller.onButtonPressed('2');
+    expect(controller.onEqualsPressed(), isFalse);
+    expect(controller.history.first, contains('2 + 2'));
+
+    for (final digit in '3112'.split('')) {
+      controller.onButtonPressed(digit);
+    }
+    controller.onButtonPressed('×');
+    for (final digit in '1231'.split('')) {
+      controller.onButtonPressed(digit);
+    }
+    expect(controller.onEqualsPressed(), isTrue);
+    expect(controller.history.any((line) => line.contains('3112')), isFalse);
+  });
+
   test('degistirilen giris kodunu tanir', () {
     final controller = CalculatorController();
 

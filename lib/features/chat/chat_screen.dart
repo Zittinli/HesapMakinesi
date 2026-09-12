@@ -16,6 +16,9 @@ import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/moderation_service.dart';
 import '../../services/settings_service.dart';
+import '../../services/storage_service.dart';
+import 'chat_search_screen.dart';
+import 'media_capture_screen.dart';
 import 'message_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -60,6 +63,7 @@ class _ChatScreenState extends State<ChatScreen> {
   ChatService? _chatService;
   SettingsService? _settingsService;
   String? _myUid;
+  bool _showJumpDown = false;
 
   static const _ttlOptions = <int?>[null, 10, 60];
 
@@ -93,6 +97,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _messageController.addListener(_onComposerChanged);
+    _scrollController.addListener(_onScrollOffset);
   }
 
   @override
@@ -100,6 +105,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _typingDebounce?.cancel();
     _messageController.removeListener(_onComposerChanged);
     _messageController.dispose();
+    _scrollController.removeListener(_onScrollOffset);
     _scrollController.dispose();
     _focusNode.dispose();
     _setTyping(false);
@@ -212,6 +218,100 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _captureMedia() async {
+    final captured = await Navigator.of(context).push<CapturedMedia>(
+      MaterialPageRoute(builder: (_) => const MediaCaptureScreen()),
+    );
+    if (captured == null || !mounted) return;
+    await _sendMedia(captured);
+  }
+
+  Future<void> _sendMedia(CapturedMedia captured) async {
+    if (_isSending) return;
+    setState(() => _isSending = true);
+    try {
+      final uid = _myUid!;
+      final folder = widget.chatId.isNotEmpty
+          ? 'chat_media/${widget.chatId}'
+          : 'pending_media/${ChatService.emailKey(widget.pendingEmail ?? uid)}';
+      final url = await context.read<StorageService>().uploadChatMedia(
+            folder: folder,
+            file: captured.file,
+            contentType: captured.contentType,
+          );
+      final type = captured.isVideo ? MessageType.video : MessageType.image;
+      final chatService = _chatService!;
+      if (widget.chatId.isEmpty && (widget.pendingEmail ?? '').isNotEmpty) {
+        await chatService.sendPendingMedia(
+          senderId: uid,
+          recipientEmail: widget.pendingEmail!,
+          mediaUrl: url,
+          type: type,
+          replyTo: _replyTo,
+          expireSeconds: _expireSeconds,
+        );
+      } else {
+        await chatService.sendMediaMessage(
+          chatId: widget.chatId,
+          senderId: uid,
+          mediaUrl: url,
+          type: type,
+          replyTo: _replyTo,
+          expireSeconds: _expireSeconds,
+        );
+      }
+      if (mounted) setState(() => _replyTo = null);
+      _scrollToBottom();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Medya gonderilemedi.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  Future<void> _showPersonDetails() async {
+    AppUser? user;
+    if (widget.otherUserId.isNotEmpty) {
+      user = await context.read<AuthService>().watchUser(widget.otherUserId).first;
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF161616),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  user?.visibleName ?? widget.otherUserName,
+                  style: const TextStyle(color: Colors.white, fontSize: 18),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'E-posta: ${user?.email.isNotEmpty == true ? user!.email : (widget.pendingEmail ?? '-')}',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Kayit: ${user?.createdAt == null ? '-' : ChatFormat.eventDateTime(user!.createdAt)}',
+                  style: const TextStyle(color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _saveEdit(ChatMessage message, String text) async {
     if (widget.chatId.isEmpty || _isSending) return;
     setState(() => _isSending = true);
@@ -256,15 +356,32 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _onScrollOffset() {
+    if (!_scrollController.hasClients) return;
+    final away = _scrollController.offset > 120;
+    if (away != _showJumpDown && mounted) {
+      setState(() => _showJumpDown = away);
+    }
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
       _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
+        0,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOut,
       );
     });
+  }
+
+  void _scrollToFirst() {
+    if (!_scrollController.hasClients) return;
+    _scrollController.animateTo(
+      _scrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOut,
+    );
   }
 
   Future<void> _markAsRead(List<ChatMessage> messages) async {
@@ -333,6 +450,20 @@ class _ChatScreenState extends State<ChatScreen> {
     final uid = auth.currentUser!.uid;
 
     switch (value) {
+      case 'first':
+        _scrollToFirst();
+      case 'search':
+        if (!mounted) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ChatSearchScreen(
+              messages: _lastMarkedMessages,
+              myId: uid,
+            ),
+          ),
+        );
+      case 'person':
+        await _showPersonDetails();
       case 'clear':
         final ok = await _confirm('Bu kayittaki mesajlar sizde temizlensin mi?');
         if (ok == true) {
@@ -623,6 +754,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
             return Scaffold(
               backgroundColor: const Color(0xFF0B0B0B),
+              floatingActionButton: _showJumpDown
+                  ? FloatingActionButton.small(
+                      backgroundColor: const Color(0xFF2A2A2A),
+                      foregroundColor: Colors.white70,
+                      onPressed: _scrollToBottom,
+                      child: const Icon(Icons.arrow_downward),
+                    )
+                  : null,
               appBar: AppBar(
                 backgroundColor: const Color(0xFF0B0B0B),
                 foregroundColor: Colors.white70,
@@ -631,11 +770,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   stream: _otherUserStream,
                   builder: (context, snapshot) {
                     final user = snapshot.data;
-                    return Column(
+                    return GestureDetector(
+                      onLongPress: _showPersonDetails,
+                      onTap: _showPersonDetails,
+                      child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          user?.email ?? widget.otherUserName,
+                          user?.visibleName ?? widget.otherUserName,
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w400,
@@ -664,6 +806,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           },
                         ),
                       ],
+                    ),
                     );
                   },
                 ),
@@ -678,6 +821,18 @@ class _ChatScreenState extends State<ChatScreen> {
                     icon: const Icon(Icons.more_vert),
                     onSelected: (value) => _onMenuSelected(value, pref, chat),
                     itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'search',
+                        child: Text('Bu sohbette ara', style: TextStyle(color: Colors.white70)),
+                      ),
+                      const PopupMenuItem(
+                        value: 'first',
+                        child: Text('Ilk mesaja git', style: TextStyle(color: Colors.white70)),
+                      ),
+                      const PopupMenuItem(
+                        value: 'person',
+                        child: Text('Kisi ayrintisi', style: TextStyle(color: Colors.white70)),
+                      ),
                       const PopupMenuItem(
                         value: 'clear',
                         child: Text('Sohbeti temizle', style: TextStyle(color: Colors.white70)),
@@ -776,7 +931,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             _markAsRead(messages);
                           });
-                          _scrollToBottom();
+                          if (!_showJumpDown) {
+                            _scrollToBottom();
+                          }
                         }
 
                         if (messages.isEmpty) {
@@ -788,15 +945,19 @@ class _ChatScreenState extends State<ChatScreen> {
                           );
                         }
 
+                        final reversed = messages.reversed.toList();
                         return ListView.builder(
                           controller: _scrollController,
+                          reverse: true,
                           padding: const EdgeInsets.symmetric(vertical: 12),
-                          itemCount: messages.length,
+                          itemCount: reversed.length,
                           itemBuilder: (context, index) {
-                            final message = messages[index];
-                            final showDay = index == 0 ||
-                                !ChatFormat.isSameDay(
-                                  messages[index - 1].createdAt,
+                            final message = reversed[index];
+                            final older = index == reversed.length - 1
+                                ? null
+                                : reversed[index + 1];
+                            final showDay = !ChatFormat.isSameDay(
+                                  older?.createdAt,
                                   message.createdAt,
                                 );
                             final isMine = message.senderId == currentUserId;
@@ -918,6 +1079,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                   ? Icons.timer_off_outlined
                                   : Icons.timer_outlined,
                             ),
+                          ),
+                          IconButton(
+                            tooltip: 'Fotograf / video',
+                            color: Colors.white70,
+                            onPressed: (_isSending || blocked) ? null : _captureMedia,
+                            icon: const Icon(Icons.photo_camera_outlined),
                           ),
                           Expanded(
                             child: Focus(

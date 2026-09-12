@@ -8,12 +8,14 @@ import '../../core/chat_format.dart';
 import '../../core/ticking_builder.dart';
 import '../../models/chat_model.dart';
 import '../../models/chat_pref_model.dart';
+import '../../models/message_model.dart';
 import '../../models/pending_thread_model.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/settings_service.dart';
 import '../chat/chat_screen.dart';
+import '../chat/pending_chats_screen.dart';
 import '../settings/admin_home_screen.dart';
 import '../settings/settings_screen.dart';
 
@@ -115,8 +117,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
       await _openChat(
         chatId: chatId,
         otherUserId: user.id,
-        otherUserName:
-            user.displayName.isNotEmpty ? user.displayName : user.email,
+        otherUserName: user.visibleName,
         pendingEmail: user.email,
       );
     } catch (error) {
@@ -166,9 +167,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
     await _openChat(
       chatId: chat.id,
       otherUserId: otherId,
-      otherUserName: other?.email.isNotEmpty == true
-          ? other!.email
-          : (other?.displayName.isNotEmpty == true ? other!.displayName : 'Kayit'),
+      otherUserName: other?.visibleName ?? 'Kayit',
       pendingEmail: other?.email,
     );
   }
@@ -214,11 +213,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                         : authService.watchUser(otherId),
                     builder: (context, snapshot) {
                       final user = snapshot.data;
-                      final label = user?.email.isNotEmpty == true
-                          ? user!.email
-                          : (user?.displayName.isNotEmpty == true
-                              ? user!.displayName
-                              : 'Gizli kayit');
+                      final label = user?.visibleName ?? 'Gizli kayit';
                       return Text(
                         label,
                         style: const TextStyle(color: Colors.white70),
@@ -623,44 +618,48 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                                 ),
                                 onTap: () => _showHiddenChats(hidden),
                               ),
-                            ...visiblePending.map((item) {
-                              return ListTile(
-                                textColor: Colors.white70,
-                                leading: CircleAvatar(
-                                  radius: 20,
-                                  backgroundColor: const Color(0xFF2A2A2A),
-                                  child: Text(
-                                    ChatFormat.initials(item.recipientEmail),
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 13,
+                            if (pending.isNotEmpty)
+                              ListTile(
+                                dense: true,
+                                leading: const Icon(
+                                  Icons.schedule_outlined,
+                                  color: Colors.white38,
+                                  size: 20,
+                                ),
+                                title: Text(
+                                  'Bekleyen sohbetler (${pending.length})',
+                                  style: const TextStyle(
+                                    color: Colors.white54,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                trailing: const Icon(
+                                  Icons.chevron_right,
+                                  color: Colors.white30,
+                                ),
+                                onTap: () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => PendingChatsScreen(
+                                        threads: pending,
+                                        onExitToCalculator:
+                                            widget.onExitToCalculator,
+                                      ),
                                     ),
-                                  ),
+                                  );
+                                },
+                              ),
+                            if (query.isNotEmpty)
+                              _GlobalMessageHits(
+                                query: query,
+                                currentUserId: currentUserId,
+                                onOpen: (chat, title) => _openChat(
+                                  chatId: chat.id,
+                                  otherUserId:
+                                      chat.otherParticipantId(currentUserId),
+                                  otherUserName: title,
                                 ),
-                                title: Text(item.recipientEmail),
-                                subtitle: Text(
-                                  item.lastMessage.isEmpty
-                                      ? 'Cevrimdisi iletilecek'
-                                      : item.lastMessage,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: Colors.white38),
-                                ),
-                                trailing: const Text(
-                                  'Bekliyor',
-                                  style: TextStyle(
-                                    color: Colors.white30,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                onTap: () => _openChat(
-                                  chatId: '',
-                                  otherUserId: '',
-                                  otherUserName: item.recipientEmail,
-                                  pendingEmail: item.recipientEmail,
-                                ),
-                              );
-                            }),
+                              ),
                             if (chats.isNotEmpty)
                               Expanded(
                                 child: _ChatRecordsList(
@@ -830,9 +829,7 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
             final chat = visible[index];
             final otherUserId = chat.otherParticipantId(widget.currentUserId);
             final otherUser = users[otherUserId];
-            final title = otherUser?.email ??
-                otherUser?.displayName ??
-                'Kullanici';
+            final title = otherUser?.visibleName ?? 'Kullanici';
             final pref = widget.prefs[chat.id] ?? ChatPref.empty(chat.id);
             final unread = chat.unreadFor(widget.currentUserId);
 
@@ -997,5 +994,59 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
         }
       };
     });
+  }
+}
+
+class _GlobalMessageHits extends StatelessWidget {
+  const _GlobalMessageHits({
+    required this.query,
+    required this.currentUserId,
+    required this.onOpen,
+  });
+
+  final String query;
+  final String currentUserId;
+  final void Function(ChatRoom chat, String title) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<({ChatRoom chat, ChatMessage message})>>(
+      future: context.read<ChatService>().searchAllChats(
+            userId: currentUserId,
+            query: query,
+          ),
+      builder: (context, snapshot) {
+        final hits = snapshot.data ?? const [];
+        if (hits.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text(
+                'Mesajlarda',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ),
+            ...hits.take(12).map((hit) {
+              return ListTile(
+                dense: true,
+                title: Text(
+                  hit.message.preview,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                subtitle: Text(
+                  ChatFormat.eventDateTime(hit.message.createdAt),
+                  style: const TextStyle(color: Colors.white30, fontSize: 11),
+                ),
+                onTap: () => onOpen(hit.chat, 'Sohbet'),
+              );
+            }),
+          ],
+        );
+      },
+    );
   }
 }

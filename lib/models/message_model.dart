@@ -1,5 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/search_tokens.dart';
+
+enum MessageType { text, image, video }
+
 class ChatMessage {
   const ChatMessage({
     required this.id,
@@ -7,6 +11,8 @@ class ChatMessage {
     required this.text,
     required this.createdAt,
     required this.readBy,
+    this.type = MessageType.text,
+    this.mediaUrl,
     this.replyToId,
     this.replyToText,
     this.replyToSenderId,
@@ -20,6 +26,8 @@ class ChatMessage {
   final String id;
   final String senderId;
   final String text;
+  final MessageType type;
+  final String? mediaUrl;
   final DateTime? createdAt;
   final List<String> readBy;
   final String? replyToId;
@@ -32,6 +40,9 @@ class ChatMessage {
   final DateTime? editedAt;
 
   bool get wasEdited => editedAt != null;
+  bool get hasMedia =>
+      (type == MessageType.image || type == MessageType.video) &&
+      (mediaUrl ?? '').isNotEmpty;
 
   bool isReadBy(String userId) => readBy.contains(userId);
 
@@ -57,12 +68,25 @@ class ChatMessage {
     return left.isNegative ? Duration.zero : left;
   }
 
+  String get preview {
+    if (type == MessageType.image) return text.isEmpty ? 'Fotograf' : text;
+    if (type == MessageType.video) return text.isEmpty ? 'Video' : text;
+    return text;
+  }
+
   factory ChatMessage.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
+    final typeRaw = data['type'] as String? ?? 'text';
     return ChatMessage(
       id: doc.id,
       senderId: data['senderId'] as String? ?? '',
       text: data['text'] as String? ?? '',
+      type: typeRaw == 'video'
+          ? MessageType.video
+          : typeRaw == 'image'
+              ? MessageType.image
+              : MessageType.text,
+      mediaUrl: data['mediaUrl'] as String?,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
       readBy: List<String>.from(data['readBy'] as List? ?? []),
       replyToId: data['replyToId'] as String?,
@@ -77,16 +101,23 @@ class ChatMessage {
   }
 
   Map<String, dynamic> toFirestore() {
+    final typeRaw = type == MessageType.video
+        ? 'video'
+        : type == MessageType.image
+            ? 'image'
+            : 'text';
     return {
       'senderId': senderId,
       'text': text,
-      'type': 'text',
+      'type': typeRaw,
       'createdAt': createdAt != null
           ? Timestamp.fromDate(createdAt!)
           : FieldValue.serverTimestamp(),
       'readBy': readBy,
       'deletedFor': deletedFor,
       'deletedForEveryone': deletedForEveryone,
+      'tokens': SearchTokens.fromText('$text $preview'),
+      if (mediaUrl != null) 'mediaUrl': mediaUrl,
       if (replyToId != null) 'replyToId': replyToId,
       if (replyToText != null) 'replyToText': replyToText,
       if (replyToSenderId != null) 'replyToSenderId': replyToSenderId,

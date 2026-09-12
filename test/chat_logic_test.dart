@@ -22,7 +22,7 @@ void main() {
       expect(ChatFormat.listTime(today), '14:05');
 
       final yesterday = today.subtract(const Duration(days: 1));
-      expect(ChatFormat.listTime(yesterday), 'Dün');
+      expect(ChatFormat.listTime(yesterday), 'Dün 14:05');
     });
 
     test('gun etiketi', () {

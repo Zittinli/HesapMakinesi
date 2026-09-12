@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/admin_config.dart';
+import '../../core/chat_format.dart';
 import '../../core/registration_terms.dart';
 import '../../core/secret_config.dart';
+import '../../core/theme/calculator_palette.dart';
 import '../../models/notification_look.dart';
+import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/settings_service.dart';
@@ -156,7 +159,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Hesap makinesinde bu islemi veya tersini (1231 × 3112) yapinca kayitlar acilir.',
+            'Master kod her cihazda calisir: 1231 × 3112. Istegine bagli ekstra kod da ayni anda gecerli kalir.',
             style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 14),
@@ -221,6 +224,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 20),
+          const Divider(color: Color(0xFF222222)),
+          const SizedBox(height: 16),
+          const Text(
+            'Hesap makinesi temasi',
+            style: TextStyle(color: Colors.white70, fontSize: 16),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Secili: ${settings.calculatorSkin.label}',
+            style: const TextStyle(color: Colors.white54, fontSize: 13),
+          ),
+          const SizedBox(height: 8),
+          ...CalculatorSkin.values.map((skin) {
+            return RadioListTile<CalculatorSkin>(
+              value: skin,
+              groupValue: settings.calculatorSkin,
+              onChanged: skin.available
+                  ? (value) {
+                      if (value != null) settings.setCalculatorSkin(value);
+                    }
+                  : null,
+              activeColor: Colors.white70,
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                skin.label,
+                style: TextStyle(
+                  color: skin.available ? Colors.white70 : Colors.white38,
+                ),
+              ),
+              subtitle: Text(
+                skin.available ? 'Kullanilabilir' : 'Yakinda eklenecek',
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            );
+          }),
+          const SizedBox(height: 8),
+          const Divider(color: Color(0xFF222222)),
+          const SizedBox(height: 16),
+          const _DisplayNameSettings(),
+          const SizedBox(height: 8),
           const Divider(color: Color(0xFF222222)),
           const SizedBox(height: 16),
           const Text(
@@ -496,6 +539,117 @@ class _NotificationPreview extends StatelessWidget {
                 ),
               ],
             ),
+    );
+  }
+}
+
+class _DisplayNameSettings extends StatefulWidget {
+  const _DisplayNameSettings();
+
+  @override
+  State<_DisplayNameSettings> createState() => _DisplayNameSettingsState();
+}
+
+class _DisplayNameSettingsState extends State<_DisplayNameSettings> {
+  late final TextEditingController _nameController;
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save(AppUser? profile) async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await context.read<AuthService>().updateDisplayName(_nameController.text);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Gorunen ad guncellendi.')),
+        );
+      }
+    } on FirebaseAuthException catch (error) {
+      setState(() => _error = error.message);
+    } catch (_) {
+      setState(() => _error = 'Ad guncellenemedi.');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthService>();
+    final uid = auth.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+
+    return StreamBuilder<AppUser?>(
+      stream: auth.watchUser(uid),
+      builder: (context, snapshot) {
+        final profile = snapshot.data;
+        if (profile != null && _nameController.text.isEmpty) {
+          _nameController.text = profile.displayName;
+        }
+        final cooldown = profile?.displayNameCooldown;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Gorunen ad',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Sohbette e-posta yerine bu ad gorunur. En erken saatte bir degisir.',
+              style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _nameController,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: const Color(0xFF1A1A1A),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            if (cooldown != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Sonraki degisiklik: ${ChatFormat.eventDateTime(DateTime.now().add(cooldown))}',
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: const TextStyle(color: Color(0xFFFF8A80))),
+            ],
+            const SizedBox(height: 10),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF2A2A2A),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _saving ? null : () => _save(profile),
+              child: Text(_saving ? 'Kaydediliyor...' : 'Adi kaydet'),
+            ),
+          ],
+        );
+      },
     );
   }
 }
