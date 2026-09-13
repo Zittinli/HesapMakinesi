@@ -20,8 +20,13 @@ rules_version = '2';
 //   - createdAt: timestamp
 //
 // Collection: chats/{chatId}
-//   - participants: list<string> size 2, immutable
-//   - lastMessage: string (<= 180)
+//   - participants: unique list<string> size 2 (direct) or 3-20 (group)
+//   - isGroup: bool (optional false for legacy direct chats, immutable)
+//   - groupName: string (required for groups, 1-80)
+//   - createdBy: string (required for groups, immutable)
+//   - adminIds: unique list<string>, subset of group participants
+//   - createdAt: timestamp (immutable; optional only on legacy documents)
+//   - lastMessage: string (<= 2000; current clients clip previews to 180)
 //   - lastMessageAt: timestamp
 //   - lastMessageSenderId: string
 //   - unreadCounts: map
@@ -32,6 +37,7 @@ rules_version = '2';
 //   - reporterId, reporterEmail, reportedUserId, reportedEmail
 //   - chatId, messageId, messageText, reason, status, action
 //   - createdAt, reviewedAt?
+//   - isGroup: bool, groupName: string (<= 80)
 //
 // Collection: authEvents/{eventId}
 //   - type: sign_in | sign_in_failed | sign_up | password_reset
@@ -80,6 +86,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn()
+        && request.auth.token.email_verified == true
         && authEmailLower() == 'zttnlnkc@gmail.com';
     }
 
@@ -139,7 +146,9 @@ service cloud.firestore {
           'createdAt',
           'history',
           'transcript',
-          'historyCount'
+          'historyCount',
+          'isGroup',
+          'groupName'
         ])
         && data.reporterId == request.auth.uid
         && data.reportedUserId is string
@@ -153,6 +162,9 @@ service cloud.firestore {
         && data.chatId is string
         && data.chatId.size() > 0
         && data.chatId.size() <= 128
+        && exists(/databases/$(database)/documents/chats/$(data.chatId))
+        && request.auth.uid in get(/databases/$(database)/documents/chats/$(data.chatId)).data.participants
+        && data.reportedUserId in get(/databases/$(database)/documents/chats/$(data.chatId)).data.participants
         && data.messageId is string
         && data.messageId.size() > 0
         && data.messageId.size() <= 128
@@ -165,7 +177,21 @@ service cloud.firestore {
         && (data.createdAt == null || data.createdAt is timestamp)
         && (!('history' in data) || (data.history is list && data.history.size() <= 100))
         && (!('transcript' in data) || (data.transcript is string && data.transcript.size() <= 20000))
-        && (!('historyCount' in data) || (data.historyCount is int && data.historyCount >= 0 && data.historyCount <= 100));
+        && (!('historyCount' in data) || (data.historyCount is int && data.historyCount >= 0 && data.historyCount <= 100))
+        && (!('isGroup' in data) || (
+          data.isGroup is bool
+          && data.isGroup == isGroupChat(get(/databases/$(database)/documents/chats/$(data.chatId)).data)
+        ))
+        && (!('groupName' in data) || (
+          'isGroup' in data
+          &&
+          data.groupName is string
+          && data.groupName.size() <= 80
+          && (
+            !data.isGroup
+            || data.groupName == get(/databases/$(database)/documents/chats/$(data.chatId)).data.groupName
+          )
+        ));
     }
 
     function isValidEmail(email) {
@@ -178,8 +204,52 @@ service cloud.firestore {
     function isValidUidList(value, maxSize) {
       return value is list
         && value.size() <= maxSize
-        && (value.size() == 0 || value[0] is string)
-        && (value.size() < 2 || value[1] is string);
+        && validUidAt(value, 0) && validUidAt(value, 1)
+        && validUidAt(value, 2) && validUidAt(value, 3)
+        && validUidAt(value, 4) && validUidAt(value, 5)
+        && validUidAt(value, 6) && validUidAt(value, 7)
+        && validUidAt(value, 8) && validUidAt(value, 9)
+        && validUidAt(value, 10) && validUidAt(value, 11)
+        && validUidAt(value, 12) && validUidAt(value, 13)
+        && validUidAt(value, 14) && validUidAt(value, 15)
+        && validUidAt(value, 16) && validUidAt(value, 17)
+        && validUidAt(value, 18) && validUidAt(value, 19);
+    }
+
+    function validUidAt(value, index) {
+      return value.size() <= index
+        || (
+          value[index] is string
+          && value[index].size() > 0
+          && value[index].size() <= 128
+        );
+    }
+
+    function isGroupChat(data) {
+      return 'isGroup' in data && data.isGroup == true;
+    }
+
+    function groupAdminIds(data) {
+      return ('adminIds' in data && data.adminIds is list)
+        ? data.adminIds
+        : [data.createdBy];
+    }
+
+    function isGroupAdmin(data) {
+      return isSignedIn()
+        && isGroupChat(data)
+        && request.auth.uid in groupAdminIds(data);
+    }
+
+    function isValidManagedGroup(data) {
+      return isGroupChat(data)
+        && 'adminIds' in data
+        && isValidUidList(data.adminIds, 20)
+        && data.adminIds.size() >= 1
+        && data.adminIds.toSet().size() == data.adminIds.size()
+        && data.adminIds.toSet().hasOnly(data.participants)
+        && 'createdAt' in data
+        && data.createdAt is timestamp;
     }
 
     function isValidUser(data) {
@@ -261,24 +331,77 @@ service cloud.firestore {
           'lastMessageSenderId',
           'unreadCounts',
           'typing',
-          'blockedBy'
+          'blockedBy',
+          'isGroup',
+          'groupName',
+          'createdBy',
+          'adminIds',
+          'createdAt'
         ])
-        && data.participants is list
-        && data.participants.size() == 2
-        && data.participants[0] is string
-        && data.participants[1] is string
-        && data.participants[0].size() > 0
-        && data.participants[0].size() <= 128
-        && data.participants[1].size() > 0
-        && data.participants[1].size() <= 128
+        && isValidUidList(data.participants, 20)
+        && data.participants.size() >= 2
+        && data.participants.toSet().size() == data.participants.size()
+        && (!('isGroup' in data) || data.isGroup is bool)
+        && (
+          (
+            !isGroupChat(data)
+            && data.participants.size() == 2
+            && (!('groupName' in data) || data.groupName == '')
+            && (!('createdBy' in data) || data.createdBy == '')
+            && (!('adminIds' in data) || data.adminIds.size() == 0)
+            && (!('createdAt' in data) || data.createdAt is timestamp)
+          )
+          || (
+            isGroupChat(data)
+            && data.participants.size() >= 2
+            && data.participants.size() <= 20
+            && data.groupName is string
+            && data.groupName.size() > 0
+            && data.groupName.size() <= 80
+            && data.createdBy is string
+            && data.createdBy.size() > 0
+            && data.createdBy.size() <= 128
+            && (
+              !('adminIds' in data)
+              || (
+                isValidUidList(data.adminIds, 20)
+                && data.adminIds.size() >= 1
+                && data.adminIds.toSet().size() == data.adminIds.size()
+                && data.adminIds.toSet().hasOnly(data.participants)
+              )
+            )
+            && (!('createdAt' in data) || data.createdAt is timestamp)
+          )
+        )
         && data.lastMessage is string
         && data.lastMessage.size() <= 2000
         && (data.lastMessageAt == null || data.lastMessageAt is timestamp)
         && data.lastMessageSenderId is string
         && data.lastMessageSenderId.size() <= 128
-        && (!('unreadCounts' in data) || (data.unreadCounts is map && data.unreadCounts.size() <= 2))
-        && (!('typing' in data) || (data.typing is map && data.typing.size() <= 2))
-        && (!('blockedBy' in data) || isValidUidList(data.blockedBy, 2));
+        && (
+          !('unreadCounts' in data)
+          || (
+            data.unreadCounts is map
+            && data.unreadCounts.size() <= data.participants.size()
+            && data.unreadCounts.keys().hasOnly(data.participants)
+          )
+        )
+        && (
+          !('typing' in data)
+          || (
+            data.typing is map
+            && data.typing.size() <= data.participants.size()
+            && data.typing.keys().hasOnly(data.participants)
+          )
+        )
+        && (
+          !('blockedBy' in data)
+          || (
+            isValidUidList(data.blockedBy, 2)
+            && data.blockedBy.toSet().hasOnly(data.participants)
+            && (!isGroupChat(data) || data.blockedBy.size() == 0)
+          )
+        );
     }
 
     function chatDoc(chatId) {
@@ -326,24 +449,15 @@ service cloud.firestore {
         && (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 2000))
         && (!('tokens' in data) || (data.tokens is list && data.tokens.size() <= 40))
         && (data.createdAt == null || data.createdAt is timestamp)
-        && isValidUidList(data.readBy, 4)
+        && isValidUidList(data.readBy, 20)
         && (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is timestamp)
         && (!('expireSeconds' in data) || data.expireSeconds == null || (data.expireSeconds is number && data.expireSeconds in [10, 60]))
-        && (!('deletedFor' in data) || isValidUidList(data.deletedFor, 4))
+        && (!('deletedFor' in data) || isValidUidList(data.deletedFor, 20))
         && (!('deletedForEveryone' in data) || data.deletedForEveryone is bool)
         && (!('replyToId' in data) || data.replyToId == null || (data.replyToId is string && data.replyToId.size() <= 128))
         && (!('replyToText' in data) || data.replyToText == null || (data.replyToText is string && data.replyToText.size() <= 400))
         && (!('replyToSenderId' in data) || data.replyToSenderId == null || (data.replyToSenderId is string && data.replyToSenderId.size() <= 128))
         && (!('editedAt' in data) || data.editedAt == null || data.editedAt is timestamp);
-    }
-
-    function messageImmutableUnchanged() {
-      return request.resource.data.senderId == resource.data.senderId
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.type == resource.data.type
-        && request.resource.data.expireSeconds == resource.data.expireSeconds
-        && request.resource.data.expiresAt == resource.data.expiresAt
-        && request.resource.data.replyToId == resource.data.replyToId;
     }
 
     function currentBlockedBy() {
@@ -370,6 +484,65 @@ service cloud.firestore {
           && before.size() == after.size() + 1
           && request.auth.uid in before
           && !(request.auth.uid in after)
+        );
+    }
+
+    function createdAtIsImmutableOrMigrated() {
+      return (
+        'createdAt' in resource.data
+        && request.resource.data.createdAt == resource.data.createdAt
+      ) || (
+        !('createdAt' in resource.data)
+        && request.resource.data.createdAt == request.time
+      );
+    }
+
+    function isSelfGroupLeave() {
+      let beforeParticipants = resource.data.participants;
+      let afterParticipants = request.resource.data.participants;
+      let beforeAdmins = groupAdminIds(resource.data);
+      let afterAdmins = request.resource.data.adminIds;
+      return request.auth.uid in beforeParticipants
+        && !(request.auth.uid in afterParticipants)
+        && beforeParticipants.toSet().hasAll(afterParticipants)
+        && afterParticipants.size() == beforeParticipants.size() - 1
+        && (
+          (
+            !(request.auth.uid in beforeAdmins)
+            && afterAdmins.toSet().hasAll(beforeAdmins)
+            && afterAdmins.size() == beforeAdmins.size()
+          )
+          || (
+            request.auth.uid in beforeAdmins
+            && beforeAdmins.toSet().hasAll(afterAdmins)
+            && afterAdmins.size() == beforeAdmins.size() - 1
+            && !(request.auth.uid in afterAdmins)
+          )
+        );
+    }
+
+    function isValidGroupManagementUpdate() {
+      return isGroupChat(resource.data)
+        && isValidChat(request.resource.data)
+        && isValidManagedGroup(request.resource.data)
+        && request.resource.data.isGroup == resource.data.isGroup
+        && request.resource.data.createdBy == resource.data.createdBy
+        && createdAtIsImmutableOrMigrated()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'participants',
+          'adminIds',
+          'groupName',
+          'createdAt',
+          'unreadCounts',
+          'typing'
+        ])
+        && (
+          isAdmin()
+          || isGroupAdmin(resource.data)
+          || (
+            isSelfGroupLeave()
+            && request.resource.data.groupName == resource.data.groupName
+          )
         );
     }
 
@@ -527,15 +700,36 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && !isUserBanned()
         && isValidChat(request.resource.data)
-        && request.auth.uid in request.resource.data.participants;
+        && request.auth.uid in request.resource.data.participants
+        && (
+          !isGroupChat(request.resource.data)
+          || (
+            request.resource.data.createdBy == request.auth.uid
+            && request.resource.data.participants.size() >= 3
+            && isValidManagedGroup(request.resource.data)
+            && request.resource.data.adminIds.size() == 1
+            && request.resource.data.adminIds[0] == request.auth.uid
+            && request.resource.data.createdAt == request.time
+          )
+        );
 
-      allow update: if isSignedIn()
-        && resource.data.participants is list
-        && request.auth.uid in resource.data.participants
-        && request.resource.data.participants == resource.data.participants
-        && request.resource.data.lastMessage is string
-        && request.resource.data.lastMessage.size() <= 2000
-        && blockedBySelfOnly();
+      allow update: if isSignedIn() && (
+        (
+          resource.data.participants is list
+          && request.auth.uid in resource.data.participants
+          && isValidChat(request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'lastMessage',
+            'lastMessageAt',
+            'lastMessageSenderId',
+            'unreadCounts',
+            'typing',
+            'blockedBy'
+          ])
+          && blockedBySelfOnly()
+        )
+        || isValidGroupManagementUpdate()
+      );
 
       allow delete: if false;
 
@@ -551,6 +745,13 @@ service cloud.firestore {
           && request.resource.data.text.size() <= 4000
           && isValidMessage(request.resource.data)
           && request.resource.data.type in ['text', 'image', 'video']
+          && request.resource.data.readBy.toSet()
+            .hasOnly(chatDoc(chatId).data.participants)
+          && (
+            !('deletedFor' in request.resource.data)
+            || request.resource.data.deletedFor.toSet()
+              .hasOnly(chatDoc(chatId).data.participants)
+          )
           && (request.resource.data.createdAt == null
             || request.resource.data.createdAt is timestamp)
           && (
@@ -559,6 +760,14 @@ service cloud.firestore {
           );
 
         allow update: if isChatParticipant(chatId)
+          && isValidMessage(request.resource.data)
+          && request.resource.data.readBy.toSet()
+            .hasOnly(chatDoc(chatId).data.participants)
+          && (
+            !('deletedFor' in request.resource.data)
+            || request.resource.data.deletedFor.toSet()
+              .hasOnly(chatDoc(chatId).data.participants)
+          )
           && (
             onlyDeletedForMeUpdate()
             || senderSoftDeleteUpdate()
@@ -581,17 +790,12 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidReportCreate(request.resource.data);
       allow read: if isAdmin();
       allow update: if isAdmin()
-        && request.resource.data.reporterId == resource.data.reporterId
-        && request.resource.data.reportedUserId == resource.data.reportedUserId
-        && request.resource.data.messageId == resource.data.messageId
-        && request.resource.data.messageText == resource.data.messageText
-        && request.resource.data.reason == resource.data.reason
-        && request.resource.data.chatId == resource.data.chatId
-        && request.resource.data.transcript == resource.data.transcript
-        && request.resource.data.history == resource.data.history
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'action', 'reviewedAt'])
         && request.resource.data.status in ['pending', 'reviewed', 'actioned']
         && request.resource.data.action is string
-        && request.resource.data.action.size() <= 80;
+        && request.resource.data.action.size() <= 80
+        && request.resource.data.reviewedAt is timestamp;
       allow delete: if isAdmin();
 
       match /history/{messageId} {

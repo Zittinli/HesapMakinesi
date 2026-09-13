@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -16,9 +18,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   final settings = SettingsService();
@@ -31,7 +31,6 @@ Future<void> main() async {
     chatService: chatService,
     authService: authService,
   );
-  await notificationService.start();
 
   runApp(
     HesapMakinesiApp(
@@ -41,4 +40,5 @@ Future<void> main() async {
       notificationService: notificationService,
     ),
   );
+  unawaited(notificationService.start());
 }

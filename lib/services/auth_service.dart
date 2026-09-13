@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -15,10 +17,10 @@ class AuthService extends ChangeNotifier {
     FirebaseFirestore? firestore,
     AuthLogService? authLog,
     EmailCheckService? emailCheck,
-  })  : _auth = auth ?? FirebaseAuth.instance,
-        _firestore = firestore ?? FirebaseFirestore.instance,
-        _authLog = authLog ?? AuthLogService(),
-        _emailCheck = emailCheck ?? EmailCheckService();
+  }) : _auth = auth ?? FirebaseAuth.instance,
+       _firestore = firestore ?? FirebaseFirestore.instance,
+       _authLog = authLog ?? AuthLogService(),
+       _emailCheck = emailCheck ?? EmailCheckService();
 
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
@@ -74,8 +76,7 @@ class AuthService extends ChangeNotifier {
         success: false,
         errorCode: error.code,
       );
-      if (error.code == 'user-not-found' ||
-          error.code == 'invalid-email') {
+      if (error.code == 'user-not-found' || error.code == 'invalid-email') {
         return;
       }
       rethrow;
@@ -120,7 +121,10 @@ class AuthService extends ChangeNotifier {
       emailOtpVerified: false,
     );
 
-    await _firestore.collection('users').doc(user.uid).set(appUser.toFirestore());
+    await _firestore
+        .collection('users')
+        .doc(user.uid)
+        .set(appUser.toFirestore());
     await _authLog.log(type: 'sign_up', email: email.trim().toLowerCase());
     try {
       await user.sendEmailVerification();
@@ -142,10 +146,7 @@ class AuthService extends ChangeNotifier {
     final user = _auth.currentUser;
     if (user == null || user.emailVerified) return;
     await user.sendEmailVerification();
-    await _authLog.log(
-      type: 'otp_sent',
-      email: user.email ?? '',
-    );
+    await _authLog.log(type: 'otp_sent', email: user.email ?? '');
   }
 
   /// Firebase'den taze kullanici bilgisini ceker ve dogrulanmissa
@@ -157,10 +158,7 @@ class AuthService extends ChangeNotifier {
     final refreshed = _auth.currentUser;
     final verified = refreshed?.emailVerified == true;
     if (verified) {
-      await _authLog.log(
-        type: 'otp_verified',
-        email: refreshed?.email ?? '',
-      );
+      await _authLog.log(type: 'otp_verified', email: refreshed?.email ?? '');
       await _claimPending();
       notifyListeners();
     }
@@ -252,10 +250,9 @@ class AuthService extends ChangeNotifier {
     final email = user?.email;
     if (user == null || email == null || email.isEmpty) return;
     try {
-      await ChatService(firestore: _firestore).claimPendingInbox(
-        recipientId: user.uid,
-        recipientEmail: email,
-      );
+      await ChatService(
+        firestore: _firestore,
+      ).claimPendingInbox(recipientId: user.uid, recipientEmail: email);
     } catch (_) {}
   }
 
@@ -314,6 +311,39 @@ class AuthService extends ChangeNotifier {
     return _firestore.collection('users').doc(userId).snapshots().map((doc) {
       if (!doc.exists) return null;
       return AppUser.fromFirestore(doc);
+    });
+  }
+
+  Stream<List<AppUser?>> watchUsers(List<String> userIds) {
+    final ids = userIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return Stream.value(const []);
+
+    return Stream.multi((controller) {
+      final users = <String, AppUser>{};
+      final subscriptions =
+          <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
+
+      for (var start = 0; start < ids.length; start += 30) {
+        final end = (start + 30).clamp(0, ids.length).toInt();
+        final chunk = ids.sublist(start, end);
+        final subscription = _firestore
+            .collection('users')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .snapshots()
+            .listen((snapshot) {
+              for (final doc in snapshot.docs) {
+                users[doc.id] = AppUser.fromFirestore(doc);
+              }
+              controller.add(ids.map((id) => users[id]).toList());
+            }, onError: controller.addError);
+        subscriptions.add(subscription);
+      }
+
+      controller.onCancel = () async {
+        for (final subscription in subscriptions) {
+          await subscription.cancel();
+        }
+      };
     });
   }
 }

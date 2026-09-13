@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/theme/calculator_palette.dart';
@@ -23,6 +24,14 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     ['4', '5', '6', '-'],
     ['1', '2', '3', '+'],
     ['0', '.', '='],
+  ];
+
+  static const _samsungPortraitButtons = [
+    ['C', '⌫', '%', '÷'],
+    ['7', '8', '9', '×'],
+    ['4', '5', '6', '-'],
+    ['1', '2', '3', '+'],
+    ['±', '0', '.', '='],
   ];
 
   static const _landscapeButtons = [
@@ -67,11 +76,101 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         return;
       }
       try {
-        context.read<SettingsService>().setCalculatorHistory(_controller.history);
+        context.read<SettingsService>().setCalculatorHistory(
+          _controller.history,
+        );
       } catch (_) {}
       return;
     }
     _controller.onButtonPressed(label);
+  }
+
+  Future<void> _showHistory(
+    CalculatorPalette palette,
+    SettingsService? settings,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: palette.background,
+      isScrollControlled: true,
+      builder: (context) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.68,
+            child: Column(
+              children: [
+                Expanded(
+                  child: _controller.history.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'Gecmis bos',
+                            style: TextStyle(color: Colors.white38),
+                          ),
+                        )
+                      : ListView.separated(
+                          reverse: true,
+                          padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+                          itemCount: _controller.history.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 18),
+                          itemBuilder: (context, index) {
+                            final line =
+                                _controller.history[_controller.history.length -
+                                    index -
+                                    1];
+                            final parts = line.split(' = ');
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  parts.first,
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 18,
+                                  ),
+                                ),
+                                if (parts.length > 1)
+                                  Text(
+                                    '= ${parts.sublist(1).join(' = ')}',
+                                    textAlign: TextAlign.right,
+                                    style: TextStyle(
+                                      color: palette.historyText,
+                                      fontSize: 24,
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
+                        ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+                  child: FilledButton(
+                    onPressed: _controller.history.isEmpty
+                        ? null
+                        : () {
+                            _controller.clearHistory();
+                            settings?.setCalculatorHistory(const []);
+                            Navigator.pop(context);
+                          },
+                    style: FilledButton.styleFrom(
+                      backgroundColor: palette.buttonLight,
+                      foregroundColor: palette.displayText,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 28,
+                        vertical: 14,
+                      ),
+                    ),
+                    child: const Text('Gecmisi temizle'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -83,6 +182,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     final palette = CalculatorPalette.of(
       settings?.calculatorSkin ?? CalculatorSkin.classic,
     );
+    final isSamsung = settings?.calculatorSkin == CalculatorSkin.samsung;
 
     return Scaffold(
       backgroundColor: palette.background,
@@ -92,21 +192,62 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
             final landscape = orientation == Orientation.landscape;
             return Column(
               children: [
-                ListenableBuilder(
-                  listenable: _controller,
-                  builder: (context, _) {
-                    if (_controller.history.isEmpty) {
-                      return const SizedBox.shrink();
-                    }
-                    return SizedBox(
-                    height: landscape ? 36 : 48,
-                    child: ListView(
+                if (isSamsung)
+                  SizedBox(
+                    height: 56,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: 'Gecmis',
+                          onPressed: () => _showHistory(palette, settings),
+                          icon: const Icon(
+                            Icons.history,
+                            color: Colors.white70,
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          tooltip: landscape
+                              ? 'Standart hesap makinesi'
+                              : 'Bilimsel hesap makinesi',
+                          onPressed: () =>
+                              SystemChrome.setPreferredOrientations(
+                                landscape
+                                    ? const [DeviceOrientation.portraitUp]
+                                    : const [
+                                        DeviceOrientation.landscapeLeft,
+                                        DeviceOrientation.landscapeRight,
+                                      ],
+                              ),
+                          icon: Icon(
+                            landscape
+                                ? Icons.calculate_outlined
+                                : Icons.functions_outlined,
+                            color: Colors.white70,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  ListenableBuilder(
+                    listenable: _controller,
+                    builder: (context, _) {
+                      if (_controller.history.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      return SizedBox(
+                        height: landscape ? 36 : 48,
+                        child: ListView(
                           scrollDirection: Axis.horizontal,
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           children: [
                             for (final line in _controller.history.take(12))
                               Padding(
-                                padding: const EdgeInsets.only(right: 12, top: 8),
+                                padding: const EdgeInsets.only(
+                                  right: 12,
+                                  top: 8,
+                                ),
                                 child: Text(
                                   line,
                                   style: TextStyle(
@@ -117,9 +258,9 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                               ),
                           ],
                         ),
-                    );
-                  },
-                ),
+                      );
+                    },
+                  ),
                 Expanded(
                   flex: landscape ? 2 : 2,
                   child: ListenableBuilder(
@@ -151,8 +292,9 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                                     _controller.expressionDisplay,
                                     textAlign: TextAlign.right,
                                     style: TextStyle(
-                                      color: palette.displayText
-                                          .withValues(alpha: 0.5),
+                                      color: palette.displayText.withValues(
+                                        alpha: 0.5,
+                                      ),
                                       fontSize: landscape ? 18 : 28,
                                       fontWeight: FontWeight.w300,
                                     ),
@@ -182,18 +324,22 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                     child: ListenableBuilder(
                       listenable: _controller,
                       builder: (context, _) {
-                        final rows =
-                            landscape ? _landscapeButtons : _portraitButtons;
+                        final rows = landscape
+                            ? _landscapeButtons
+                            : isSamsung
+                            ? _samsungPortraitButtons
+                            : _portraitButtons;
                         return Column(
                           children: [
                             for (final row in rows)
                               Expanded(
                                 child: Row(
                                   children: _buildRow(
-                                  row,
-                                  compact: landscape,
-                                  palette: palette,
-                                ),
+                                    row,
+                                    compact: landscape,
+                                    palette: palette,
+                                    isSamsung: isSamsung,
+                                  ),
                                 ),
                               ),
                           ],
@@ -214,11 +360,12 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     List<String> labels, {
     required bool compact,
     required CalculatorPalette palette,
+    required bool isSamsung,
   }) {
     return [
       for (final label in labels)
         Expanded(
-          flex: !compact && label == '0' ? 2 : 1,
+          flex: !compact && !isSamsung && label == '0' ? 2 : 1,
           child: Padding(
             padding: EdgeInsets.all(compact ? 3 : 6),
             child: _CalcButton(
@@ -227,6 +374,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                   : label,
               compact: compact,
               palette: palette,
+              isSamsung: isSamsung,
               onPressed: () => _handlePress(label == 'Rad' ? 'Deg' : label),
             ),
           ),
@@ -240,12 +388,14 @@ class _CalcButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     required this.palette,
+    required this.isSamsung,
     this.compact = false,
   });
 
   final String label;
   final VoidCallback onPressed;
   final CalculatorPalette palette;
+  final bool isSamsung;
   final bool compact;
 
   static const _operators = {'+', '-', '×', '÷', '=', 'xʸ'};
@@ -259,7 +409,18 @@ class _CalcButton extends StatelessWidget {
     final Color background;
     final Color textColor;
 
-    if (isOperator) {
+    if (isSamsung && label == '=') {
+      background = palette.buttonOrange;
+      textColor = palette.buttonOrangeText;
+    } else if (isSamsung && isOperator) {
+      background = palette.buttonLight;
+      textColor = palette.buttonLightText;
+    } else if (isSamsung) {
+      background = palette.buttonDark;
+      textColor = label == 'C' || label == '⌫'
+          ? const Color(0xFFFF6670)
+          : palette.displayText;
+    } else if (isOperator) {
       background = palette.buttonOrange;
       textColor = palette.buttonOrangeText;
     } else if (isFunction) {
@@ -270,7 +431,7 @@ class _CalcButton extends StatelessWidget {
       textColor = palette.displayText;
     }
 
-    return Material(
+    final button = Material(
       color: background,
       borderRadius: BorderRadius.circular(999),
       child: InkWell(
@@ -309,6 +470,20 @@ class _CalcButton extends StatelessWidget {
           },
         ),
       ),
+    );
+    if (!isSamsung) return button;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final shortest = constraints.maxWidth < constraints.maxHeight
+            ? constraints.maxWidth
+            : constraints.maxHeight;
+        return Center(
+          child: SizedBox.square(
+            dimension: shortest * (compact ? 0.9 : 0.88),
+            child: button,
+          ),
+        );
+      },
     );
   }
 }

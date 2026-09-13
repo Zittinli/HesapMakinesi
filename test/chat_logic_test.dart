@@ -35,29 +35,17 @@ void main() {
 
     test('son gorulme ve son aktif etiketi', () {
       final now = DateTime(2026, 8, 30, 20, 0);
+      expect(ChatFormat.lastSeenLabel(now, now: now, isOnline: true), 'Aktif');
       expect(
-        ChatFormat.lastSeenLabel(now, now: now, isOnline: true),
-        'Aktif',
-      );
-      expect(
-        ChatFormat.lastSeenLabel(
-          DateTime(2026, 8, 30, 19, 59),
-          now: now,
-        ),
+        ChatFormat.lastSeenLabel(DateTime(2026, 8, 30, 19, 59), now: now),
         'Son aktif: az once',
       );
       expect(
-        ChatFormat.lastSeenLabel(
-          DateTime(2026, 8, 30, 14, 5),
-          now: now,
-        ),
+        ChatFormat.lastSeenLabel(DateTime(2026, 8, 30, 14, 5), now: now),
         'Son gorulme: 14:05',
       );
       expect(
-        ChatFormat.lastSeenLabel(
-          DateTime(2026, 8, 29, 14, 5),
-          now: now,
-        ),
+        ChatFormat.lastSeenLabel(DateTime(2026, 8, 29, 14, 5), now: now),
         'Son gorulme: Dün 14:05',
       );
     });
@@ -153,18 +141,98 @@ void main() {
         lastMessage: '',
         lastMessageAt: null,
         lastMessageSenderId: '',
-        typing: {
-          'u2': DateTime.now().subtract(const Duration(seconds: 9)),
-        },
+        typing: {'u2': DateTime.now().subtract(const Duration(seconds: 9))},
       );
 
       expect(chat.isOtherTyping('u2'), isFalse);
+    });
+
+    test('grup başlığını ve katılımcıları korur', () {
+      const chat = ChatRoom(
+        id: 'group-id',
+        participants: ['u1', 'u2', 'u3'],
+        lastMessage: '',
+        lastMessageAt: null,
+        lastMessageSenderId: '',
+        isGroup: true,
+        groupName: 'Proje Ekibi',
+        createdBy: 'u1',
+      );
+
+      expect(chat.titleFor('u2'), 'Proje Ekibi');
+      expect(chat.otherParticipantId('u2'), 'u1');
+      expect(chat.participants, hasLength(3));
+    });
+
+    test('eski grupta kurucuyu yönetici kabul eder', () {
+      const legacy = ChatRoom(
+        id: 'legacy-group',
+        participants: ['u1', 'u2', 'u3'],
+        lastMessage: '',
+        lastMessageAt: null,
+        lastMessageSenderId: '',
+        isGroup: true,
+        groupName: 'Eski Grup',
+        createdBy: 'u1',
+      );
+
+      expect(legacy.effectiveAdminIds, ['u1']);
+      expect(legacy.isAdmin('u1'), isTrue);
+      expect(legacy.isAdmin('u2'), isFalse);
+    });
+
+    test('yeni yönetici listesi kurucu geri dönüşünün önüne geçer', () {
+      const chat = ChatRoom(
+        id: 'managed-group',
+        participants: ['u1', 'u2', 'u3'],
+        lastMessage: '',
+        lastMessageAt: null,
+        lastMessageSenderId: '',
+        isGroup: true,
+        groupName: 'Yönetilen Grup',
+        createdBy: 'u1',
+        adminIds: ['u2'],
+      );
+
+      expect(chat.effectiveAdminIds, ['u2']);
+      expect(chat.isAdmin('u1'), isFalse);
+      expect(chat.isAdmin('u2'), isTrue);
     });
   });
 
   test('chatId sirali ve kararli', () {
     expect(ChatService.chatIdFor('b', 'a'), ChatService.chatIdFor('a', 'b'));
     expect(ChatService.chatIdFor('a', 'b'), 'a_b');
+  });
+
+  group('grup oluşturma yardımcıları', () {
+    test('üye kimliklerini temizler ve tekilleştirir', () {
+      expect(ChatService.normalizeGroupMemberIds([' u1 ', '', 'u2', 'u1']), [
+        'u1',
+        'u2',
+      ]);
+    });
+
+    test('e-postaları normalize eder ve sorunları ayrı bildirir', () {
+      final parsed = ChatService.parseGroupEmails(
+        'ALI@EXAMPLE.COM,\nveli@example.com ali@example.com;bozuk',
+      );
+
+      expect(parsed.emails, ['ali@example.com', 'veli@example.com']);
+      expect(parsed.duplicates, ['ali@example.com']);
+      expect(parsed.invalid, ['bozuk']);
+    });
+
+    test('okunmamış sayacı gönderen dışındaki herkese gider', () {
+      final recipients = ChatService.unreadRecipientIds([
+        'u1',
+        'u2',
+        'u3',
+        'u2',
+      ], 'u1');
+
+      expect(recipients.toSet(), {'u2', 'u3'});
+    });
   });
 
   group('Moderation', () {
@@ -176,7 +244,10 @@ void main() {
     });
 
     test('kalici ban ve timeout kisitlar', () {
-      expect(const ModerationStatus(bannedPermanently: true).isRestricted(), isTrue);
+      expect(
+        const ModerationStatus(bannedPermanently: true).isRestricted(),
+        isTrue,
+      );
       expect(
         ModerationStatus(
           timeoutUntil: DateTime.now().add(const Duration(hours: 1)),
@@ -196,7 +267,33 @@ void main() {
       final timeout = ModerationStatus(
         timeoutUntil: DateTime.now().add(const Duration(days: 1)),
       );
-      expect(ModerationStatus.stricter(timeout, banned).bannedPermanently, isTrue);
+      expect(
+        ModerationStatus.stricter(timeout, banned).bannedPermanently,
+        isTrue,
+      );
+    });
+
+    test('grup raporu kullanıcı altında gruplanır ve grup bilgisini korur', () {
+      const report = MessageReport(
+        id: 'r1',
+        reporterId: 'u1',
+        reporterEmail: 'bildiren@example.com',
+        reportedUserId: 'u2',
+        reportedEmail: 'bildirilen@example.com',
+        chatId: 'g1',
+        messageId: 'm1',
+        messageText: 'mesaj',
+        reason: ReportReason.abuse,
+        status: 'pending',
+        isGroup: true,
+        groupName: 'Arkadaşlar',
+      );
+
+      final groups = groupReportsByUser([report]);
+      expect(groups, hasLength(1));
+      expect(groups.single.pendingCount, 1);
+      expect(groups.single.reports.single.groupName, 'Arkadaşlar');
+      expect(groups.single.reports.single.isGroup, isTrue);
     });
   });
 

@@ -1,12 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum CalculatorSkin {
-  classic,
-  samsung,
-  huawei,
-  xiaomi,
-  iphone,
-}
+enum CalculatorSkin { classic, samsung, huawei, xiaomi, iphone }
 
 extension CalculatorSkinX on CalculatorSkin {
   String get id => name;
@@ -72,12 +66,12 @@ class CalculatorPalette {
   static const samsung = CalculatorPalette(
     background: Color(0xFF010101),
     displayText: Color(0xFFF5F5F5),
-    buttonDark: Color(0xFF2B2B2B),
-    buttonLight: Color(0xFF3E3E3E),
+    buttonDark: Color(0xFF171719),
+    buttonLight: Color(0xFF29292B),
     buttonLightText: Color(0xFFF2F2F2),
-    buttonOrange: Color(0xFFFF8A00),
-    buttonOrangeText: Color(0xFF1A0C00),
-    historyText: Color(0x88FFFFFF),
+    buttonOrange: Color(0xFF16A093),
+    buttonOrangeText: Color(0xFFFFFFFF),
+    historyText: Color(0xFF15988D),
   );
 
   static CalculatorPalette of(CalculatorSkin skin) {

@@ -92,13 +92,15 @@ exports.notifyOnChatMessage = onDocumentCreated(
     const chatId = event.params.chatId;
     const db = getFirestore();
     const chat = await db.collection("chats").doc(chatId).get();
-    const participants = chat.data()?.participants || [];
+    const chatData = chat.data() || {};
+    const participants = chatData.participants || [];
     const recipients = participants.filter((id) => id && id !== senderId);
     if (recipients.length === 0) return;
     const sender = await db.collection("users").doc(senderId).get();
     const senderData = sender.data() || {};
-    const title =
-      senderData.displayName || senderData.email || "Kayit";
+    const title = chatData.isGroup === true && chatData.groupName
+      ? String(chatData.groupName)
+      : senderData.displayName || senderData.email || "Kayit";
     const body = data.text || (data.type === "video" ? "Video" : data.type === "image" ? "Fotograf" : "Yeni mesaj");
     try {
       await sendChatPush({ recipients, title, body, chatId });

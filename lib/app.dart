@@ -57,14 +57,19 @@ class RootScreen extends StatelessWidget {
 
   void _openMessaging(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const AuthGateScreen()),
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 120),
+        reverseTransitionDuration: const Duration(milliseconds: 100),
+        pageBuilder: (_, animation, secondaryAnimation) =>
+            const AuthGateScreen(),
+        transitionsBuilder: (_, animation, secondaryAnimation, child) =>
+            FadeTransition(opacity: animation, child: child),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return CalculatorScreen(
-      onSecretUnlock: () => _openMessaging(context),
-    );
+    return CalculatorScreen(onSecretUnlock: () => _openMessaging(context));
   }
 }

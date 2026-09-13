@@ -1,17 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../core/chat_format.dart';
 import '../../models/message_model.dart';
+import '../../services/chat_service.dart';
 
 class ChatSearchScreen extends StatefulWidget {
   const ChatSearchScreen({
     super.key,
     required this.messages,
     required this.myId,
+    required this.chatId,
   });
 
   final List<ChatMessage> messages;
   final String myId;
+  final String chatId;
 
   @override
   State<ChatSearchScreen> createState() => _ChatSearchScreenState();
@@ -19,11 +25,49 @@ class ChatSearchScreen extends StatefulWidget {
 
 class _ChatSearchScreenState extends State<ChatSearchScreen> {
   final _controller = TextEditingController();
+  Timer? _debounce;
+  List<ChatMessage> _remoteHits = const [];
+  bool _loading = false;
+  int _searchGeneration = 0;
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    final query = value.trim();
+    if (widget.chatId.isEmpty || query.isEmpty) {
+      setState(() {
+        _loading = false;
+        _remoteHits = const [];
+      });
+      return;
+    }
+    final generation = ++_searchGeneration;
+    setState(() => _loading = true);
+    _debounce = Timer(const Duration(milliseconds: 300), () async {
+      try {
+        final hits = await context.read<ChatService>().searchMessagesInChat(
+          chatId: widget.chatId,
+          query: query,
+        );
+        if (!mounted || generation != _searchGeneration) return;
+        setState(() {
+          _remoteHits = hits;
+          _loading = false;
+        });
+      } catch (_) {
+        if (!mounted || generation != _searchGeneration) return;
+        setState(() {
+          _remoteHits = const [];
+          _loading = false;
+        });
+      }
+    });
   }
 
   @override
@@ -31,9 +75,11 @@ class _ChatSearchScreenState extends State<ChatSearchScreen> {
     final query = _controller.text.trim().toLowerCase();
     final hits = query.isEmpty
         ? const <ChatMessage>[]
+        : widget.chatId.isNotEmpty
+        ? _remoteHits
         : widget.messages
-            .where((item) => item.preview.toLowerCase().contains(query))
-            .toList();
+              .where((item) => item.preview.toLowerCase().contains(query))
+              .toList();
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0B0B),
@@ -49,10 +95,14 @@ class _ChatSearchScreenState extends State<ChatSearchScreen> {
             hintStyle: TextStyle(color: Colors.white30),
             border: InputBorder.none,
           ),
-          onChanged: (_) => setState(() {}),
+          onChanged: _onQueryChanged,
         ),
       ),
-      body: hits.isEmpty
+      body: _loading
+          ? const Center(
+              child: CircularProgressIndicator(color: Colors.white24),
+            )
+          : hits.isEmpty
           ? Center(
               child: Text(
                 query.isEmpty ? 'Kelime yazin.' : 'Sonuc yok.',
@@ -66,6 +116,7 @@ class _ChatSearchScreenState extends State<ChatSearchScreen> {
               itemBuilder: (context, index) {
                 final message = hits[index];
                 return ListTile(
+                  onTap: () => Navigator.pop(context, message.id),
                   title: Text(
                     message.preview,
                     maxLines: 2,

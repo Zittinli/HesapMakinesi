@@ -17,9 +17,9 @@ class NotificationService {
     required SettingsService settings,
     required ChatService chatService,
     required AuthService authService,
-  })  : _settings = settings,
-        _chatService = chatService,
-        _authService = authService;
+  }) : _settings = settings,
+       _chatService = chatService,
+       _authService = authService;
 
   final SettingsService _settings;
   final ChatService _chatService;
@@ -37,6 +37,7 @@ class NotificationService {
   bool _hubOpen = false;
   bool _ready = false;
   bool _primed = false;
+  String? _activeUid;
 
   void setHubOpen(bool open) {
     _hubOpen = open;
@@ -45,6 +46,9 @@ class NotificationService {
   Future<void> start() async {
     if (_ready) return;
     _ready = true;
+    _authSub = _authService.authStateChanges().listen(_onAuth);
+    _onAuth(_authService.currentUser);
+
     try {
       const android = AndroidInitializationSettings('@mipmap/ic_launcher');
       const ios = DarwinInitializationSettings();
@@ -61,22 +65,16 @@ class NotificationService {
       );
       await FirebaseMessaging.instance
           .setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: false,
-        sound: true,
-      );
-      _foregroundSub =
-          FirebaseMessaging.onMessage.listen(_onForegroundMessage);
+            alert: true,
+            badge: false,
+            sound: true,
+          );
+      _foregroundSub = FirebaseMessaging.onMessage.listen(_onForegroundMessage);
     } catch (_) {}
-
-    _authSub = _authService.authStateChanges().listen(_onAuth);
-    final user = _authService.currentUser;
-    if (user != null) {
-      _listenChats(user.uid);
-    }
   }
 
   void _onAuth(User? user) {
+    if (user?.uid == _activeUid && (_chatsSub != null || user == null)) return;
     _chatsSub?.cancel();
     _prefsSub?.cancel();
     _tokenSub?.cancel();
@@ -84,9 +82,11 @@ class NotificationService {
     _primed = false;
     _prefs = {};
     if (user == null) {
+      _activeUid = null;
       _plugin.cancelAll();
       return;
     }
+    _activeUid = user.uid;
     _listenChats(user.uid);
     unawaited(_syncPushToken(user.uid));
     _tokenSub = FirebaseMessaging.instance.onTokenRefresh.listen((_) {
@@ -104,21 +104,15 @@ class NotificationService {
           .doc(uid)
           .collection('fcmTokens')
           .doc(id)
-          .set({
-        'token': token,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+          .set({'token': token, 'updatedAt': FieldValue.serverTimestamp()});
     } catch (_) {}
   }
 
   void _onForegroundMessage(RemoteMessage message) {
     if (_hubOpen) return;
-    final title = message.notification?.title ??
-        message.data['sender'] ??
-        'Kayit';
-    final body = message.notification?.body ??
-        message.data['preview'] ??
-        '';
+    final title =
+        message.notification?.title ?? message.data['sender'] ?? 'Kayit';
+    final body = message.notification?.body ?? message.data['preview'] ?? '';
     unawaited(
       showMessage(
         id: (message.data['chatId'] ?? title).hashCode,
@@ -140,7 +134,8 @@ class NotificationService {
   void _onChats(String uid, List<ChatRoom> chats) {
     if (!_primed) {
       for (final chat in chats) {
-        _seenAt[chat.id] = chat.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        _seenAt[chat.id] =
+            chat.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
       }
       _primed = true;
       return;
@@ -162,6 +157,14 @@ class NotificationService {
   }
 
   Future<void> _showForChat(ChatRoom chat, String uid) async {
+    if (chat.isGroup) {
+      await showMessage(
+        id: chat.id.hashCode,
+        sender: chat.groupName.isEmpty ? 'Grup' : chat.groupName,
+        preview: chat.lastMessage,
+      );
+      return;
+    }
     final otherId = chat.otherParticipantId(uid);
     var sender = 'Kayit';
     if (otherId.isNotEmpty) {
@@ -181,7 +184,8 @@ class NotificationService {
     try {
       await _plugin
           .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>()
+            AndroidFlutterLocalNotificationsPlugin
+          >()
           ?.requestNotificationsPermission();
     } catch (_) {}
   }
@@ -230,11 +234,7 @@ class NotificationService {
   }
 
   Future<void> showPreview() {
-    return showMessage(
-      id: 991991,
-      sender: 'Ahmet',
-      preview: 'Yarin gorusuruz',
-    );
+    return showMessage(id: 991991, sender: 'Ahmet', preview: 'Yarin gorusuruz');
   }
 
   void dispose() {

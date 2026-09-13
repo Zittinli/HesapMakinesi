@@ -115,10 +115,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (error) {
       if (!mounted) return;
-      final message = error.code == 'wrong-password' || error.code == 'invalid-credential'
+      final message =
+          error.code == 'wrong-password' || error.code == 'invalid-credential'
           ? 'Sifre yanlis.'
           : 'Hesap silinemedi. Tekrar giris yapip deneyin.';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -277,6 +280,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            value: settings.screenProtectionEnabled,
+            onChanged: settings.setScreenProtectionEnabled,
+            title: const Text(
+              'Ekran korumasi',
+              style: TextStyle(color: Colors.white70),
+            ),
+            subtitle: const Text(
+              'Ekran goruntusu, kayit, paylasim ve son uygulamalar '
+              'onizlemesinde icerigi gizler.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+            activeColor: Colors.white70,
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             value: settings.typingEnabled,
             onChanged: settings.setTypingEnabled,
             title: const Text(
@@ -357,10 +375,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: settings.notificationLook == NotificationLook.off
                 ? null
                 : settings.setSoundEnabled,
-            title: const Text(
-              'Ses',
-              style: TextStyle(color: Colors.white70),
-            ),
+            title: const Text('Ses', style: TextStyle(color: Colors.white70)),
             activeColor: Colors.white70,
           ),
           SwitchListTile(
@@ -397,7 +412,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 6),
             const Text(
               'Bildirilen kullanicilar ve giris kayitlari. Firebase Console > Firestore > reports ve authEvents koleksiyonlarinda da durur.',
-              style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 12,
+                height: 1.4,
+              ),
             ),
             const SizedBox(height: 12),
             OutlinedButton(
@@ -410,7 +429,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   MaterialPageRoute(
                     builder: (_) => AdminHomeScreen(
                       onExitToCalculator: () {
-                        Navigator.of(context).popUntil((route) => route.isFirst);
+                        Navigator.of(
+                          context,
+                        ).popUntil((route) => route.isFirst);
                       },
                     ),
                   ),
@@ -612,7 +633,11 @@ class _DisplayNameSettingsState extends State<_DisplayNameSettings> {
             const SizedBox(height: 6),
             const Text(
               'Sohbette e-posta yerine bu ad gorunur. En erken saatte bir degisir.',
-              style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 12,
+                height: 1.4,
+              ),
             ),
             const SizedBox(height: 10),
             TextField(

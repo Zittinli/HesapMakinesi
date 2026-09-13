@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -31,8 +30,11 @@ class MediaCaptureScreen extends StatefulWidget {
 class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
   CameraController? _controller;
   Future<void>? _ready;
+  List<CameraDescription> _cameras = const [];
+  int _cameraIndex = 0;
   bool _videoMode = false;
   bool _recording = false;
+  bool _switchingCamera = false;
   CapturedMedia? _preview;
   VideoPlayerController? _video;
   String? _error;
@@ -45,22 +47,34 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
 
   Future<void> _openCamera() async {
     try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
+      _cameras = await availableCameras();
+      if (_cameras.isEmpty) {
         setState(() => _error = 'Kamera bulunamadi.');
         return;
       }
-      final back = cameras.firstWhere(
+      _cameraIndex = _cameras.indexWhere(
         (item) => item.lensDirection == CameraLensDirection.back,
-        orElse: () => cameras.first,
       );
-      final controller = CameraController(
-        back,
-        ResolutionPreset.high,
-        enableAudio: true,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-      _controller = controller;
+      if (_cameraIndex < 0) _cameraIndex = 0;
+      await _initializeCamera(_cameras[_cameraIndex]);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = 'Kamera acilamadi.');
+      }
+    }
+  }
+
+  Future<void> _initializeCamera(CameraDescription description) async {
+    final previous = _controller;
+    final controller = CameraController(
+      description,
+      _videoMode ? ResolutionPreset.medium : ResolutionPreset.high,
+      enableAudio: true,
+      imageFormatGroup: ImageFormatGroup.jpeg,
+    );
+    _controller = controller;
+    await previous?.dispose();
+    try {
       await controller.initialize();
       if (mounted) setState(() {});
     } catch (error) {
@@ -68,6 +82,24 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
         setState(() => _error = 'Kamera acilamadi.');
       }
     }
+  }
+
+  Future<void> _switchCamera() async {
+    if (_cameras.length < 2 || _recording || _switchingCamera) return;
+    setState(() => _switchingCamera = true);
+    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
+    await _initializeCamera(_cameras[_cameraIndex]);
+    if (mounted) setState(() => _switchingCamera = false);
+  }
+
+  Future<void> _toggleMediaMode() async {
+    if (_recording || _switchingCamera || _cameras.isEmpty) return;
+    setState(() {
+      _switchingCamera = true;
+      _videoMode = !_videoMode;
+    });
+    await _initializeCamera(_cameras[_cameraIndex]);
+    if (mounted) setState(() => _switchingCamera = false);
   }
 
   @override
@@ -79,7 +111,9 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
 
   Future<File> _moveToTemp(XFile raw, String fallbackExt) async {
     final dir = await getTemporaryDirectory();
-    final ext = p.extension(raw.path).isEmpty ? fallbackExt : p.extension(raw.path);
+    final ext = p.extension(raw.path).isEmpty
+        ? fallbackExt
+        : p.extension(raw.path);
     final dest = File(
       p.join(dir.path, 'hm_${DateTime.now().millisecondsSinceEpoch}$ext'),
     );
@@ -101,9 +135,9 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
       });
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Fotograf cekilemedi.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Fotograf cekilemedi.')));
       }
     }
   }
@@ -135,9 +169,9 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
     } catch (_) {
       if (mounted) {
         setState(() => _recording = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Video kaydedilemedi.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Video kaydedilemedi.')));
       }
     }
   }
@@ -147,7 +181,10 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
       final picker = ImagePicker();
       final raw = _videoMode
           ? await picker.pickVideo(source: ImageSource.gallery)
-          : await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+          : await picker.pickImage(
+              source: ImageSource.gallery,
+              imageQuality: 85,
+            );
       if (raw == null) return;
       final file = await _moveToTemp(raw, _videoMode ? '.mp4' : '.jpg');
       VideoPlayerController? player;
@@ -168,9 +205,9 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
       });
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Galeri acilamadi.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Galeri acilamadi.')));
     }
   }
 
@@ -192,9 +229,9 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
         title: Text(_videoMode ? 'Video' : 'Fotograf'),
         actions: [
           TextButton(
-            onPressed: _recording
+            onPressed: (_recording || _switchingCamera)
                 ? null
-                : () => setState(() => _videoMode = !_videoMode),
+                : _toggleMediaMode,
             child: Text(
               _videoMode ? 'Fotografa gec' : 'Videoya gec',
               style: const TextStyle(color: Colors.white70),
@@ -235,7 +272,10 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
                     IconButton(
                       tooltip: 'Galeriden sec (istege bagli)',
                       onPressed: _pickFromGallery,
-                      icon: const Icon(Icons.photo_library_outlined, color: Colors.white70),
+                      icon: const Icon(
+                        Icons.photo_library_outlined,
+                        color: Colors.white70,
+                      ),
                     ),
                     GestureDetector(
                       onTap: _videoMode ? _toggleRecord : _takePhoto,
@@ -245,11 +285,31 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 4),
-                          color: _recording ? const Color(0xFFFF5252) : Colors.white24,
+                          color: _recording
+                              ? const Color(0xFFFF5252)
+                              : Colors.white24,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 48),
+                    IconButton(
+                      tooltip: 'Kamerayi cevir',
+                      onPressed: _cameras.length > 1 && !_switchingCamera
+                          ? _switchCamera
+                          : null,
+                      icon: _switchingCamera
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white70,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.cameraswitch_outlined,
+                              color: Colors.white70,
+                            ),
+                    ),
                   ],
                 ),
               ),
@@ -267,17 +327,17 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
         Expanded(
           child: media.isVideo
               ? (_video == null
-                  ? const Center(child: CircularProgressIndicator())
-                  : AspectRatio(
-                      aspectRatio: _video!.value.aspectRatio == 0
-                          ? 9 / 16
-                          : _video!.value.aspectRatio,
-                      child: VideoPlayer(_video!),
-                    ))
+                    ? const Center(child: CircularProgressIndicator())
+                    : AspectRatio(
+                        aspectRatio: _video!.value.aspectRatio == 0
+                            ? 9 / 16
+                            : _video!.value.aspectRatio,
+                        child: VideoPlayer(_video!),
+                      ))
               : Image.file(media.file, fit: BoxFit.contain),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
           child: Column(
             children: [
               const Text(
@@ -285,27 +345,6 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
                 style: TextStyle(color: Colors.white38, fontSize: 12),
               ),
               const SizedBox(height: 12),
-              TextButton(
-                onPressed: () async {
-                  try {
-                    if (media.isVideo) {
-                      await Gal.putVideo(media.file.path);
-                    } else {
-                      await Gal.putImage(media.file.path);
-                    }
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Galeriye kaydedildi.')),
-                    );
-                  } catch (_) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Galeriye yazilamadi.')),
-                    );
-                  }
-                },
-                child: const Text('Galeriye kaydet (istege bagli)'),
-              ),
               Row(
                 children: [
                   Expanded(

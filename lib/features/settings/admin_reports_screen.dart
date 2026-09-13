@@ -62,8 +62,7 @@ class AdminReportsList extends StatelessWidget {
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           itemCount: groups.length,
-          separatorBuilder: (_, __) =>
-              const Divider(color: Color(0xFF222222)),
+          separatorBuilder: (_, __) => const Divider(color: Color(0xFF222222)),
           itemBuilder: (context, index) {
             return _ReportedUserTile(group: groups[index]);
           },
@@ -116,9 +115,21 @@ class _ReportedUserTile extends StatelessWidget {
                 label: const Text('Cezayi kaldir'),
                 onPressed: () => _clear(context),
                 backgroundColor: const Color(0xFF161616),
-                labelStyle:
-                    const TextStyle(color: Colors.white54, fontSize: 12),
+                labelStyle: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                ),
               ),
+              if (group.reports.any((report) => report.isGroup))
+                ActionChip(
+                  label: const Text('Tüm gruplardan çıkar'),
+                  onPressed: () => _removeFromAllGroups(context),
+                  backgroundColor: const Color(0xFF3A1A1A),
+                  labelStyle: const TextStyle(
+                    color: Color(0xFFFF8A80),
+                    fontSize: 12,
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 8),
@@ -142,8 +153,9 @@ class _ReportedUserTile extends StatelessWidget {
         permanent: permanent,
         action: label,
       ),
-      backgroundColor:
-          permanent ? const Color(0xFF3A1A1A) : const Color(0xFF1A1A1A),
+      backgroundColor: permanent
+          ? const Color(0xFF3A1A1A)
+          : const Color(0xFF1A1A1A),
       labelStyle: TextStyle(
         color: permanent ? const Color(0xFFFF8A80) : Colors.white70,
         fontSize: 12,
@@ -167,19 +179,21 @@ class _ReportedUserTile extends StatelessWidget {
         timeout: timeout,
         permanent: permanent,
       );
-      for (final report in group.reports.where((item) => item.status == 'pending')) {
+      for (final report in group.reports.where(
+        (item) => item.status == 'pending',
+      )) {
         await moderation.markReportReviewed(report.id, action: action);
       }
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$action uygulandi.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$action uygulandi.')));
       }
     } catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$error')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
       }
     }
   }
@@ -187,21 +201,36 @@ class _ReportedUserTile extends StatelessWidget {
   Future<void> _clear(BuildContext context) async {
     final moderation = context.read<ModerationService>();
     try {
-      await moderation.clearPenalty(
-        userId: group.userId,
-        email: group.email,
-      );
-      for (final report in group.reports.where((item) => item.status == 'pending')) {
-        await moderation.markReportReviewed(
-          report.id,
-          action: 'cleared',
+      await moderation.clearPenalty(userId: group.userId, email: group.email);
+      for (final report in group.reports.where(
+        (item) => item.status == 'pending',
+      )) {
+        await moderation.markReportReviewed(report.id, action: 'cleared');
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
+  Future<void> _removeFromAllGroups(BuildContext context) async {
+    try {
+      final count = await context
+          .read<ModerationService>()
+          .removeReportedUserFromAllGroups(group.userId);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Kullanıcı $count gruptan çıkarıldı.')),
         );
       }
     } catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$error')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
       }
     }
   }
@@ -247,6 +276,11 @@ class _ReportTile extends StatelessWidget {
             'Bildiren: ${report.reporterEmail}',
             style: const TextStyle(color: Colors.white30, fontSize: 12),
           ),
+          if (report.isGroup)
+            Text(
+              'Grup: ${report.groupName.isEmpty ? report.chatId : report.groupName}',
+              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            ),
           if (report.action.isNotEmpty)
             Text(
               'Islem: ${report.action}',
@@ -280,9 +314,21 @@ class _ReportTile extends StatelessWidget {
                 label: const Text('Reddet'),
                 onPressed: () => _review(context, 'reviewed'),
                 backgroundColor: const Color(0xFF161616),
-                labelStyle:
-                    const TextStyle(color: Colors.white54, fontSize: 12),
+                labelStyle: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                ),
               ),
+              if (report.isGroup)
+                ActionChip(
+                  label: const Text('Bu gruptan çıkar'),
+                  onPressed: () => _removeFromGroup(context),
+                  backgroundColor: const Color(0xFF3A1A1A),
+                  labelStyle: const TextStyle(
+                    color: Color(0xFFFF8A80),
+                    fontSize: 12,
+                  ),
+                ),
             ],
           ),
         ],
@@ -293,14 +339,36 @@ class _ReportTile extends StatelessWidget {
   Future<void> _review(BuildContext context, String action) async {
     try {
       await context.read<ModerationService>().markReportReviewed(
-            report.id,
-            action: action,
-          );
+        report.id,
+        action: action,
+      );
     } catch (error) {
       if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
+  Future<void> _removeFromGroup(BuildContext context) async {
+    try {
+      final moderation = context.read<ModerationService>();
+      await moderation.removeReportedUserFromGroup(
+        chatId: report.chatId,
+        userId: report.reportedUserId,
+      );
+      await moderation.markReportReviewed(report.id, action: 'group_removed');
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$error')),
+          const SnackBar(content: Text('Kullanıcı gruptan çıkarıldı.')),
         );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
       }
     }
   }

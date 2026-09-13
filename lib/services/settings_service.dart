@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/secret_config.dart';
@@ -8,6 +9,12 @@ import '../models/notification_look.dart';
 class SettingsService extends ChangeNotifier {
   SettingsService();
 
+  static const _launcherIconChannel = MethodChannel(
+    'com.hesapmakinesi.hesap_makinesi/launcher_icon',
+  );
+  static const _screenSecurityChannel = MethodChannel(
+    'com.hesapmakinesi.hesap_makinesi/screen_security',
+  );
   static const _keyLeft = 'unlock_left';
   static const _keyOperator = 'unlock_operator';
   static const _keyRight = 'unlock_right';
@@ -17,6 +24,7 @@ class SettingsService extends ChangeNotifier {
   static const _keyTyping = 'privacy_typing';
   static const _keyReadReceipts = 'privacy_read_receipts';
   static const _keyLastSeen = 'privacy_last_seen';
+  static const _keyScreenProtection = 'privacy_screen_protection';
   static const _keyTheme = 'calculator_theme';
   static const _keyHistory = 'calculator_history';
 
@@ -31,6 +39,7 @@ class SettingsService extends ChangeNotifier {
   bool _typingEnabled = true;
   bool _readReceiptsEnabled = true;
   bool _lastSeenEnabled = true;
+  bool _screenProtectionEnabled = false;
   CalculatorSkin _calculatorSkin = CalculatorSkin.classic;
   List<String> _calculatorHistory = [];
   bool _ready = false;
@@ -45,6 +54,7 @@ class SettingsService extends ChangeNotifier {
   bool get typingEnabled => _typingEnabled;
   bool get readReceiptsEnabled => _readReceiptsEnabled;
   bool get lastSeenEnabled => _lastSeenEnabled;
+  bool get screenProtectionEnabled => _screenProtectionEnabled;
   CalculatorSkin get calculatorSkin => _calculatorSkin;
   List<String> get calculatorHistory => List.unmodifiable(_calculatorHistory);
   bool get ready => _ready;
@@ -52,7 +62,8 @@ class SettingsService extends ChangeNotifier {
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     _unlockLeft = prefs.getString(_keyLeft) ?? SecretConfig.secretLeft;
-    _unlockOperator = prefs.getString(_keyOperator) ?? SecretConfig.secretOperator;
+    _unlockOperator =
+        prefs.getString(_keyOperator) ?? SecretConfig.secretOperator;
     _unlockRight = prefs.getString(_keyRight) ?? SecretConfig.secretRight;
     if (!allowedOperators.contains(_unlockOperator)) {
       _unlockOperator = SecretConfig.secretOperator;
@@ -66,8 +77,11 @@ class SettingsService extends ChangeNotifier {
     _typingEnabled = prefs.getBool(_keyTyping) ?? true;
     _readReceiptsEnabled = prefs.getBool(_keyReadReceipts) ?? true;
     _lastSeenEnabled = prefs.getBool(_keyLastSeen) ?? true;
+    _screenProtectionEnabled = prefs.getBool(_keyScreenProtection) ?? false;
     _calculatorSkin = CalculatorSkinX.fromId(prefs.getString(_keyTheme));
     _calculatorHistory = prefs.getStringList(_keyHistory) ?? [];
+    await _syncLauncherIcon();
+    await _syncScreenProtection();
     _ready = true;
     notifyListeners();
   }
@@ -140,7 +154,20 @@ class SettingsService extends ChangeNotifier {
     _calculatorSkin = skin;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyTheme, skin.id);
+    await _syncLauncherIcon();
     notifyListeners();
+  }
+
+  Future<void> _syncLauncherIcon() async {
+    try {
+      await _launcherIconChannel.invokeMethod<void>('setLauncherIcon', {
+        'samsung': _calculatorSkin == CalculatorSkin.samsung,
+      });
+    } on MissingPluginException {
+      // Android disindaki platformlarda varsayilan ikon kullanilir.
+    } on PlatformException {
+      // Launcher degisikligi desteklenmiyorsa tema yine uygulanir.
+    }
   }
 
   Future<void> setCalculatorHistory(List<String> items) async {
@@ -155,5 +182,25 @@ class SettingsService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyLastSeen, value);
     notifyListeners();
+  }
+
+  Future<void> setScreenProtectionEnabled(bool value) async {
+    _screenProtectionEnabled = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyScreenProtection, value);
+    await _syncScreenProtection();
+    notifyListeners();
+  }
+
+  Future<void> _syncScreenProtection() async {
+    try {
+      await _screenSecurityChannel.invokeMethod<void>('setScreenProtection', {
+        'enabled': _screenProtectionEnabled,
+      });
+    } on MissingPluginException {
+      // Android disindaki platformlarda yerel ekran korumasi kullanilmaz.
+    } on PlatformException {
+      // Cihaz desteklemiyorsa ayar kayitli kalir.
+    }
   }
 }

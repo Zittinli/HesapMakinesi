@@ -14,13 +14,38 @@ class ChatBlockedException implements Exception {
   String toString() => message;
 }
 
+class GroupEmailParseResult {
+  const GroupEmailParseResult({
+    required this.emails,
+    required this.invalid,
+    required this.duplicates,
+  });
+
+  final List<String> emails;
+  final List<String> invalid;
+  final List<String> duplicates;
+}
+
 class ChatService {
   ChatService({FirebaseFirestore? firestore})
-      : _firestore = firestore ?? FirebaseFirestore.instance;
+    : _firestore = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseFirestore _firestore;
+  final Map<String, List<ChatRoom>> _chatCache = {};
+  final Map<String, Map<String, ChatPref>> _prefCache = {};
+  final Map<String, List<PendingThread>> _pendingCache = {};
 
   static const typingWindow = Duration(seconds: 6);
+  static const messagePageSize = 40;
+
+  List<ChatRoom> cachedUserChats(String userId) =>
+      List<ChatRoom>.unmodifiable(_chatCache[userId] ?? const []);
+
+  Map<String, ChatPref> cachedChatPrefs(String userId) =>
+      Map<String, ChatPref>.unmodifiable(_prefCache[userId] ?? const {});
+
+  List<PendingThread> cachedPendingSent(String userId) =>
+      List<PendingThread>.unmodifiable(_pendingCache[userId] ?? const []);
 
   static String chatIdFor(String uid1, String uid2) {
     final ids = [uid1, uid2]..sort();
@@ -29,6 +54,52 @@ class ChatService {
 
   static String emailKey(String email) {
     return email.trim().toLowerCase().replaceAll('.', ',');
+  }
+
+  static GroupEmailParseResult parseGroupEmails(String input) {
+    final values = input
+        .split(RegExp(r'[\s,;]+'))
+        .map((item) => item.trim().toLowerCase())
+        .where((item) => item.isNotEmpty);
+    final validEmail = RegExp(
+      r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
+    );
+    final emails = <String>[];
+    final invalid = <String>[];
+    final duplicates = <String>[];
+    final seen = <String>{};
+    for (final value in values) {
+      if (!validEmail.hasMatch(value)) {
+        invalid.add(value);
+      } else if (!seen.add(value)) {
+        duplicates.add(value);
+      } else {
+        emails.add(value);
+      }
+    }
+    return GroupEmailParseResult(
+      emails: emails,
+      invalid: invalid.toSet().toList(),
+      duplicates: duplicates.toSet().toList(),
+    );
+  }
+
+  static List<String> unreadRecipientIds(
+    Iterable<String> participants,
+    String senderId,
+  ) {
+    return participants
+        .where((id) => id.isNotEmpty && id != senderId)
+        .toSet()
+        .toList();
+  }
+
+  static List<String> normalizeGroupMemberIds(Iterable<String> ids) {
+    return ids
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
   }
 
   CollectionReference<Map<String, dynamic>> get _chats =>
@@ -53,19 +124,18 @@ class ChatService {
   }
 
   Stream<List<ChatRoom>> watchUserChats(String userId) {
-    return _chats
-        .where('participants', arrayContains: userId)
-        .snapshots()
-        .map((snapshot) {
-          final chats =
-              snapshot.docs.map(ChatRoom.fromFirestore).toList();
-          chats.sort((a, b) {
-            final at = a.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            final bt = b.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            return bt.compareTo(at);
-          });
-          return chats;
-        });
+    return _chats.where('participants', arrayContains: userId).snapshots().map((
+      snapshot,
+    ) {
+      final chats = snapshot.docs.map(ChatRoom.fromFirestore).toList();
+      chats.sort((a, b) {
+        final at = a.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bt = b.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bt.compareTo(at);
+      });
+      _chatCache[userId] = chats;
+      return chats;
+    });
   }
 
   Stream<ChatRoom?> watchChat(String chatId) {
@@ -75,25 +145,76 @@ class ChatService {
     });
   }
 
-  Stream<List<ChatMessage>> watchMessages(String chatId) {
+  Stream<List<ChatMessage>> watchMessages(
+    String chatId, {
+    int limit = messagePageSize,
+  }) {
     return _chats
         .doc(chatId)
         .collection('messages')
-        .orderBy('createdAt', descending: false)
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
         .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map(ChatMessage.fromFirestore).toList());
+        .map((snapshot) {
+          final messages = snapshot.docs
+              .map(ChatMessage.fromFirestore)
+              .toList();
+          return messages.reversed.toList();
+        });
+  }
+
+  Future<List<ChatMessage>> loadOlderMessages({
+    required String chatId,
+    required DateTime before,
+    int limit = messagePageSize,
+  }) {
+    return _loadOlderFrom(
+      _chats.doc(chatId).collection('messages'),
+      before: before,
+      limit: limit,
+    );
+  }
+
+  Future<ChatMessage?> getMessage({
+    required String chatId,
+    required String messageId,
+  }) async {
+    final doc = await _chats
+        .doc(chatId)
+        .collection('messages')
+        .doc(messageId)
+        .get();
+    return doc.exists ? ChatMessage.fromFirestore(doc) : null;
+  }
+
+  Future<List<ChatMessage>> _loadOlderFrom(
+    CollectionReference<Map<String, dynamic>> messages, {
+    required DateTime before,
+    required int limit,
+  }) async {
+    final snapshot = await messages
+        .orderBy('createdAt', descending: true)
+        .startAfter([Timestamp.fromDate(before)])
+        .limit(limit)
+        .get();
+    final result = snapshot.docs.map(ChatMessage.fromFirestore).toList();
+    return result.reversed.toList();
   }
 
   Stream<Map<String, ChatPref>> watchChatPrefs(String userId) {
     return _prefs(userId).snapshots().map((snapshot) {
-      return {
+      final prefs = {
         for (final doc in snapshot.docs) doc.id: ChatPref.fromFirestore(doc),
       };
+      _prefCache[userId] = prefs;
+      return prefs;
     });
   }
 
-  Future<String> getOrCreateChat(String currentUserId, String otherUserId) async {
+  Future<String> getOrCreateChat(
+    String currentUserId,
+    String otherUserId,
+  ) async {
     final chatId = chatIdFor(currentUserId, otherUserId);
     final chatRef = _chats.doc(chatId);
     final snapshot = await chatRef.get();
@@ -115,11 +236,216 @@ class ChatService {
       }
     }
 
-    await _prefs(currentUserId).doc(chatId).set({
-      'hidden': false,
-    }, SetOptions(merge: true));
+    await _prefs(
+      currentUserId,
+    ).doc(chatId).set({'hidden': false}, SetOptions(merge: true));
 
     return chatId;
+  }
+
+  Future<String> createGroup({
+    required String creatorId,
+    required String groupName,
+    required List<String> participantIds,
+  }) async {
+    final name = groupName.trim();
+    final participants = <String>{
+      creatorId,
+      ...normalizeGroupMemberIds(participantIds),
+    }.toList();
+    if (name.isEmpty || name.length > 80) {
+      throw ArgumentError('Grup adı 1-80 karakter olmalıdır.');
+    }
+    if (participants.length < 3) {
+      throw ArgumentError('Grup için en az 3 katılımcı gerekir.');
+    }
+    if (participants.length > 20) {
+      throw ArgumentError('Bir grupta en fazla 20 katılımcı olabilir.');
+    }
+
+    final chatRef = _chats.doc();
+    await chatRef.set({
+      'participants': participants,
+      'isGroup': true,
+      'groupName': name,
+      'createdBy': creatorId,
+      'adminIds': [creatorId],
+      'createdAt': FieldValue.serverTimestamp(),
+      'lastMessage': '',
+      'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastMessageSenderId': '',
+      'unreadCounts': {for (final id in participants) id: 0},
+      'typing': <String, dynamic>{},
+      'blockedBy': <String>[],
+    });
+    return chatRef.id;
+  }
+
+  Future<void> renameGroup({
+    required String chatId,
+    required String groupName,
+  }) async {
+    final name = groupName.trim();
+    if (name.isEmpty || name.length > 80) {
+      throw ArgumentError('Grup adı 1-80 karakter olmalıdır.');
+    }
+    await _updateGroup(chatId, (state) {
+      state['groupName'] = name;
+    });
+  }
+
+  Future<void> addMembers({
+    required String chatId,
+    required Iterable<String> memberIds,
+  }) async {
+    final additions = normalizeGroupMemberIds(memberIds);
+    if (additions.isEmpty) return;
+    await _updateGroup(chatId, (state) {
+      final participants = state['participants']! as List<String>;
+      final updated = {...participants, ...additions}.toList();
+      if (updated.length > 20) {
+        throw ArgumentError('Bir grupta en fazla 20 katılımcı olabilir.');
+      }
+      state['participants'] = updated;
+    });
+  }
+
+  Future<void> removeMember({
+    required String chatId,
+    required String memberId,
+  }) async {
+    final target = memberId.trim();
+    if (target.isEmpty) throw ArgumentError('Üye kimliği boş olamaz.');
+    await _updateGroup(chatId, (state) {
+      final participants = state['participants']! as List<String>;
+      if (!participants.contains(target)) return;
+      final updatedParticipants = participants
+          .where((id) => id != target)
+          .toList();
+      if (updatedParticipants.length < 2) {
+        throw StateError('Bir grupta en az 2 katılımcı kalmalıdır.');
+      }
+      final admins = (state['adminIds']! as List<String>)
+          .where((id) => id != target)
+          .toList();
+      if (admins.isEmpty) {
+        throw StateError('Grupta en az bir yönetici kalmalıdır.');
+      }
+      state
+        ..['participants'] = updatedParticipants
+        ..['adminIds'] = admins;
+    });
+  }
+
+  Future<void> leaveGroup({required String chatId, required String userId}) {
+    return removeMember(chatId: chatId, memberId: userId);
+  }
+
+  Future<void> setGroupAdmin({
+    required String chatId,
+    required String memberId,
+    required bool isAdmin,
+  }) async {
+    final target = memberId.trim();
+    if (target.isEmpty) throw ArgumentError('Üye kimliği boş olamaz.');
+    await _updateGroup(chatId, (state) {
+      final participants = state['participants']! as List<String>;
+      if (!participants.contains(target)) {
+        throw StateError('Yönetici yapılacak kullanıcı grup üyesi olmalıdır.');
+      }
+      final admins = <String>{...(state['adminIds']! as List<String>)};
+      if (isAdmin) {
+        admins.add(target);
+      } else {
+        admins.remove(target);
+      }
+      if (admins.isEmpty) {
+        throw StateError('Grupta en az bir yönetici kalmalıdır.');
+      }
+      state['adminIds'] = admins.toList();
+    });
+  }
+
+  /// Intended for the hardcoded app-admin account; Firestore rules enforce it.
+  Future<void> appAdminRemoveFromGroup({
+    required String chatId,
+    required String userId,
+  }) {
+    return removeMember(chatId: chatId, memberId: userId);
+  }
+
+  /// Removes a user from every eligible group and returns the changed count.
+  Future<int> appAdminRemoveFromAllGroups(String userId) async {
+    final snapshots = await _chats
+        .where('participants', arrayContains: userId)
+        .get();
+    var changed = 0;
+    for (final doc in snapshots.docs) {
+      if (doc.data()['isGroup'] != true) continue;
+      try {
+        await appAdminRemoveFromGroup(chatId: doc.id, userId: userId);
+        changed += 1;
+      } on StateError {
+        // Groups cannot be reduced below two members or left admin-less.
+      }
+    }
+    return changed;
+  }
+
+  Future<void> _updateGroup(
+    String chatId,
+    void Function(Map<String, Object?> state) mutate,
+  ) {
+    final ref = _chats.doc(chatId);
+    return _firestore.runTransaction((transaction) async {
+      final snapshot = await transaction.get(ref);
+      final data = snapshot.data();
+      if (data == null || data['isGroup'] != true) {
+        throw StateError('Grup bulunamadı.');
+      }
+
+      final participants = normalizeGroupMemberIds(
+        List<String>.from(data['participants'] as List? ?? const []),
+      );
+      final createdBy = (data['createdBy'] as String? ?? '').trim();
+      final storedAdmins = normalizeGroupMemberIds(
+        List<String>.from(data['adminIds'] as List? ?? const []),
+      );
+      final admins = storedAdmins.isNotEmpty
+          ? storedAdmins
+          : <String>[if (createdBy.isNotEmpty) createdBy];
+      final state = <String, Object?>{
+        'participants': participants,
+        'adminIds': admins,
+        'groupName': data['groupName'] as String? ?? '',
+      };
+      mutate(state);
+
+      final updatedParticipants = state['participants']! as List<String>;
+      final updatedAdmins = state['adminIds']! as List<String>;
+      final unreadBefore = data['unreadCounts'] is Map
+          ? Map<String, dynamic>.from(data['unreadCounts'] as Map)
+          : <String, dynamic>{};
+      final typingBefore = data['typing'] is Map
+          ? Map<String, dynamic>.from(data['typing'] as Map)
+          : <String, dynamic>{};
+      final updates = <String, dynamic>{
+        'participants': updatedParticipants,
+        'adminIds': updatedAdmins,
+        'groupName': state['groupName'],
+        'unreadCounts': {
+          for (final id in updatedParticipants) id: unreadBefore[id] ?? 0,
+        },
+        'typing': {
+          for (final id in updatedParticipants)
+            if (typingBefore.containsKey(id)) id: typingBefore[id],
+        },
+      };
+      if (!data.containsKey('createdAt')) {
+        updates['createdAt'] = FieldValue.serverTimestamp();
+      }
+      transaction.update(ref, updates);
+    });
   }
 
   Future<void> promotePendingToChat({
@@ -243,8 +569,10 @@ class ChatService {
     if (chatId.isEmpty || query.trim().isEmpty) return const [];
     final words = SearchTokens.wordsOf(query);
     if (words.isEmpty) return const [];
-    Query<Map<String, dynamic>> ref =
-        _chats.doc(chatId).collection('messages').orderBy('createdAt');
+    Query<Map<String, dynamic>> ref = _chats
+        .doc(chatId)
+        .collection('messages')
+        .orderBy('createdAt');
     try {
       final indexed = await _chats
           .doc(chatId)
@@ -271,15 +599,20 @@ class ChatService {
     required String query,
   }) async {
     if (query.trim().isEmpty) return const [];
-    final chats = await _chats.where('participants', arrayContains: userId).get();
-    final hits = <({ChatRoom chat, ChatMessage message})>[];
-    for (final doc in chats.docs) {
-      final chat = ChatRoom.fromFirestore(doc);
-      final messages = await searchMessagesInChat(chatId: chat.id, query: query);
-      for (final message in messages) {
-        hits.add((chat: chat, message: message));
-      }
-    }
+    final chats = await _chats
+        .where('participants', arrayContains: userId)
+        .get();
+    final results = await Future.wait(
+      chats.docs.map((doc) async {
+        final chat = ChatRoom.fromFirestore(doc);
+        final messages = await searchMessagesInChat(
+          chatId: chat.id,
+          query: query,
+        );
+        return [for (final message in messages) (chat: chat, message: message)];
+      }),
+    );
+    final hits = results.expand((items) => items).toList();
     hits.sort((a, b) {
       final at = a.message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
       final bt = b.message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -299,26 +632,22 @@ class ChatService {
     final participants = List<String>.from(
       chatSnap.data()?['participants'] as List? ?? const [],
     );
-    final otherId = participants.firstWhere(
-      (id) => id != message.senderId,
-      orElse: () => '',
-    );
-
-    await messageRef.set(message.toFirestore());
 
     final updates = <String, dynamic>{
       'lastMessage': _clip(preview, 180) ?? '',
       'lastMessageAt': FieldValue.serverTimestamp(),
       'lastMessageSenderId': message.senderId,
     };
-    if (otherId.isNotEmpty) {
-      updates['unreadCounts.$otherId'] = FieldValue.increment(1);
+    for (final participantId in unreadRecipientIds(
+      participants,
+      message.senderId,
+    )) {
+      updates['unreadCounts.$participantId'] = FieldValue.increment(1);
     }
-    try {
-      await chatRef.update(updates);
-    } catch (_) {
-      // Mesaj yazildi; onizleme guncellenmese de kaybolmasin.
-    }
+    final batch = _firestore.batch();
+    batch.set(messageRef, message.toFirestore());
+    batch.update(chatRef, updates);
+    await batch.commit();
   }
 
   Future<void> markMessagesAsRead({
@@ -345,15 +674,11 @@ class ChatService {
     }
 
     if (writes > 0) {
-      batch.update(_chats.doc(chatId), {
-        'unreadCounts.$readerId': 0,
-      });
+      batch.update(_chats.doc(chatId), {'unreadCounts.$readerId': 0});
       await batch.commit();
     } else {
       try {
-        await _chats.doc(chatId).update({
-          'unreadCounts.$readerId': 0,
-        });
+        await _chats.doc(chatId).update({'unreadCounts.$readerId': 0});
       } catch (_) {}
     }
   }
@@ -386,9 +711,9 @@ class ChatService {
     required String chatId,
     required bool muted,
   }) {
-    return _prefs(userId).doc(chatId).set({
-      'muted': muted,
-    }, SetOptions(merge: true));
+    return _prefs(
+      userId,
+    ).doc(chatId).set({'muted': muted}, SetOptions(merge: true));
   }
 
   Future<void> setHidden({
@@ -396,9 +721,9 @@ class ChatService {
     required String chatId,
     required bool hidden,
   }) {
-    return _prefs(userId).doc(chatId).set({
-      'hidden': hidden,
-    }, SetOptions(merge: true));
+    return _prefs(
+      userId,
+    ).doc(chatId).set({'hidden': hidden}, SetOptions(merge: true));
   }
 
   Future<void> clearChatForMe({
@@ -505,10 +830,7 @@ class ChatService {
   }) async {
     final ref = _chats.doc(chatId).collection('messages').doc(messageId);
     try {
-      await ref.update({
-        'deletedForEveryone': true,
-        'text': '',
-      });
+      await ref.update({'deletedForEveryone': true, 'text': ''});
     } catch (_) {
       await ref.delete();
     }
@@ -544,13 +866,13 @@ class ChatService {
 
   Stream<List<PendingThread>> watchPendingSent(String senderId) {
     return _pendingSent(senderId).snapshots().map((snapshot) {
-      final threads =
-          snapshot.docs.map(PendingThread.fromFirestore).toList();
+      final threads = snapshot.docs.map(PendingThread.fromFirestore).toList();
       threads.sort((a, b) {
         final at = a.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
         final bt = b.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
         return bt.compareTo(at);
       });
+      _pendingCache[senderId] = threads;
       return threads;
     });
   }
@@ -558,13 +880,35 @@ class ChatService {
   Stream<List<ChatMessage>> watchPendingMessages({
     required String senderId,
     required String recipientEmail,
+    int limit = messagePageSize,
   }) {
     return _pendingInbox(recipientEmail: recipientEmail, senderId: senderId)
         .collection('messages')
-        .orderBy('createdAt', descending: false)
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
         .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map(ChatMessage.fromFirestore).toList());
+        .map((snapshot) {
+          final messages = snapshot.docs
+              .map(ChatMessage.fromFirestore)
+              .toList();
+          return messages.reversed.toList();
+        });
+  }
+
+  Future<List<ChatMessage>> loadOlderPendingMessages({
+    required String senderId,
+    required String recipientEmail,
+    required DateTime before,
+    int limit = messagePageSize,
+  }) {
+    return _loadOlderFrom(
+      _pendingInbox(
+        recipientEmail: recipientEmail,
+        senderId: senderId,
+      ).collection('messages'),
+      before: before,
+      limit: limit,
+    );
   }
 
   Future<void> openPendingThread({
@@ -706,7 +1050,8 @@ class ChatService {
       if (lastPreview.isNotEmpty) {
         await _chats.doc(chatId).update({
           'lastMessage': _clip(lastPreview, 180) ?? lastPreview,
-          'lastMessageAt': data['lastMessageAt'] ?? FieldValue.serverTimestamp(),
+          'lastMessageAt':
+              data['lastMessageAt'] ?? FieldValue.serverTimestamp(),
           'lastMessageSenderId': senderId,
           'unreadCounts.$recipientId': FieldValue.increment(messageCount),
         });
@@ -730,8 +1075,27 @@ class ChatService {
     return watchPendingMessages(senderId: myId, recipientEmail: otherEmail);
   }
 
+  Future<List<ChatMessage>> loadOlderConversationMessages({
+    required String myId,
+    required String chatId,
+    required String otherEmail,
+    required DateTime before,
+  }) {
+    if (chatId.isNotEmpty) {
+      return loadOlderMessages(chatId: chatId, before: before);
+    }
+    if (otherEmail.trim().isEmpty) return Future.value(const []);
+    return loadOlderPendingMessages(
+      senderId: myId,
+      recipientEmail: otherEmail,
+      before: before,
+    );
+  }
+
   Future<void> deleteAccountData(String userId) async {
-    final chats = await _chats.where('participants', arrayContains: userId).get();
+    final chats = await _chats
+        .where('participants', arrayContains: userId)
+        .get();
     for (final chat in chats.docs) {
       final sent = await chat.reference
           .collection('messages')
@@ -751,7 +1115,9 @@ class ChatService {
     } catch (_) {}
   }
 
-  Future<void> _commitDeletes(Iterable<DocumentReference<Map<String, dynamic>>> refs) async {
+  Future<void> _commitDeletes(
+    Iterable<DocumentReference<Map<String, dynamic>>> refs,
+  ) async {
     final list = refs.toList();
     for (var i = 0; i < list.length; i += 400) {
       final batch = _firestore.batch();

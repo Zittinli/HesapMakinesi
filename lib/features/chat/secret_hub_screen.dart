@@ -1,11 +1,8 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/admin_config.dart';
 import '../../core/chat_format.dart';
-import '../../core/ticking_builder.dart';
 import '../../models/chat_model.dart';
 import '../../models/chat_pref_model.dart';
 import '../../models/message_model.dart';
@@ -20,10 +17,7 @@ import '../settings/admin_home_screen.dart';
 import '../settings/settings_screen.dart';
 
 class SecretHubScreen extends StatefulWidget {
-  const SecretHubScreen({
-    super.key,
-    required this.onExitToCalculator,
-  });
+  const SecretHubScreen({super.key, required this.onExitToCalculator});
 
   final VoidCallback onExitToCalculator;
 
@@ -34,6 +28,8 @@ class SecretHubScreen extends StatefulWidget {
 class _SecretHubScreenState extends State<SecretHubScreen> {
   final _emailController = TextEditingController();
   final _searchController = TextEditingController();
+  final _groupNameController = TextEditingController();
+  final _groupEmailsController = TextEditingController();
   bool _isStarting = false;
   String? _error;
   Stream<List<ChatRoom>>? _chatsStream;
@@ -55,11 +51,13 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
   void dispose() {
     _emailController.dispose();
     _searchController.dispose();
+    _groupNameController.dispose();
+    _groupEmailsController.dispose();
     super.dispose();
   }
 
-  Future<void> _openChatWithEmail() async {
-    final email = _emailController.text.trim();
+  Future<void> _openChatWithEmail([String? address]) async {
+    final email = (address ?? _emailController.text).trim();
     if (email.isEmpty) {
       setState(() => _error = 'Alici e-posta girin.');
       return;
@@ -134,6 +132,9 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
     required String otherUserId,
     required String otherUserName,
     String? pendingEmail,
+    String? initialMessageId,
+    bool isGroup = false,
+    String? groupName,
   }) {
     return Navigator.of(context).push(
       MaterialPageRoute(
@@ -141,11 +142,228 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
           chatId: chatId,
           otherUserId: otherUserId,
           otherUserName: otherUserName,
+          isGroup: isGroup,
+          groupName: groupName,
           pendingEmail: pendingEmail,
           onExitToCalculator: widget.onExitToCalculator,
+          initialMessageId: initialMessageId,
         ),
       ),
     );
+  }
+
+  Future<void> _showNewPersonDialog() async {
+    _emailController.clear();
+    final email = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF161616),
+        title: const Text('Yeni kişi', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: _emailController,
+          autofocus: true,
+          keyboardType: TextInputType.emailAddress,
+          style: const TextStyle(color: Colors.white),
+          decoration: _fieldDecoration('ornek@mail.com'),
+          onSubmitted: (value) => Navigator.pop(dialogContext, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, _emailController.text),
+            child: const Text('Devam'),
+          ),
+        ],
+      ),
+    );
+    if (email != null && email.trim().isNotEmpty && mounted) {
+      await _openChatWithEmail(email);
+      if (_error != null && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_error!)));
+      }
+    }
+  }
+
+  Future<void> _showNewGroupDialog() async {
+    _groupNameController.clear();
+    _groupEmailsController.clear();
+    final input = await showDialog<({String name, String emails})>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF161616),
+        title: const Text('Yeni grup', style: TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _groupNameController,
+                autofocus: true,
+                maxLength: 80,
+                style: const TextStyle(color: Colors.white),
+                decoration: _fieldDecoration('Grup adı'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _groupEmailsController,
+                minLines: 3,
+                maxLines: 6,
+                keyboardType: TextInputType.emailAddress,
+                style: const TextStyle(color: Colors.white),
+                decoration: _fieldDecoration(
+                  'Üye e-postaları (virgül veya yeni satır)',
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Siz otomatik eklenirsiniz. En az 2 kayıtlı kişi girin.',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, (
+              name: _groupNameController.text,
+              emails: _groupEmailsController.text,
+            )),
+            child: const Text('Oluştur'),
+          ),
+        ],
+      ),
+    );
+    if (input == null || !mounted) return;
+    await _createGroup(input.name, input.emails);
+  }
+
+  Future<void> _createGroup(String rawName, String rawEmails) async {
+    final name = rawName.trim();
+    final parsed = ChatService.parseGroupEmails(rawEmails);
+    final myEmail =
+        context.read<AuthService>().currentUser?.email?.trim().toLowerCase() ??
+        '';
+    final problems = <String>[];
+    if (name.isEmpty) problems.add('Grup adı zorunludur.');
+    if (parsed.invalid.isNotEmpty) {
+      problems.add('Geçersiz adres: ${parsed.invalid.join(', ')}');
+    }
+    if (parsed.duplicates.isNotEmpty) {
+      problems.add('Tekrarlanan adres: ${parsed.duplicates.join(', ')}');
+    }
+    if (parsed.emails.contains(myEmail)) {
+      problems.add('Kendi e-postanızı eklemeyin; otomatik katılırsınız.');
+    }
+    final emails = parsed.emails.where((email) => email != myEmail).toList();
+    if (emails.length < 2) {
+      problems.add('En az 2 farklı kişi e-postası girin.');
+    }
+    if (emails.length > 19) {
+      problems.add('Bir grupta siz dahil en fazla 20 katılımcı olabilir.');
+    }
+    if (problems.isNotEmpty) {
+      _showError(problems.join('\n'));
+      return;
+    }
+
+    setState(() => _isStarting = true);
+    try {
+      final auth = context.read<AuthService>();
+      final chatService = context.read<ChatService>();
+      final users = <AppUser>[];
+      final missing = <String>[];
+      for (final email in emails) {
+        final user = await auth.findUserByEmail(email);
+        if (user == null) {
+          missing.add(email);
+        } else {
+          users.add(user);
+        }
+      }
+      if (missing.isNotEmpty) {
+        _showError('Kayıtlı olmayan adres: ${missing.join(', ')}');
+        return;
+      }
+      final creatorId = auth.currentUser!.uid;
+      final chatId = await chatService.createGroup(
+        creatorId: creatorId,
+        groupName: name,
+        participantIds: users.map((user) => user.id).toList(),
+      );
+      if (!mounted) return;
+      await _openChat(
+        chatId: chatId,
+        otherUserId: '',
+        otherUserName: name,
+        isGroup: true,
+        groupName: name,
+      );
+    } catch (error) {
+      _showError(
+        error is ArgumentError
+            ? error.message.toString()
+            : 'Grup oluşturulamadı. Tekrar deneyin.',
+      );
+    } finally {
+      if (mounted) setState(() => _isStarting = false);
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 6)),
+    );
+  }
+
+  Future<void> _showCreateMenu() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF161616),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.person_add_alt, color: Colors.white70),
+              title: const Text(
+                'Yeni kişi',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.pop(context, 'person'),
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.group_add_outlined,
+                color: Colors.white70,
+              ),
+              title: const Text(
+                'Yeni grup',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.pop(context, 'group'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (choice == 'person') {
+      await _showNewPersonDialog();
+    } else if (choice == 'group') {
+      await _showNewGroupDialog();
+    }
   }
 
   List<ChatRoom> _hiddenChats(
@@ -162,7 +380,19 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
     final otherId = chat.otherParticipantId(uid);
     await chatService.setHidden(userId: uid, chatId: chat.id, hidden: false);
     if (!mounted) return;
-    final other = otherId.isEmpty ? null : await authService.watchUser(otherId).first;
+    if (chat.isGroup) {
+      await _openChat(
+        chatId: chat.id,
+        otherUserId: '',
+        otherUserName: chat.groupName,
+        isGroup: true,
+        groupName: chat.groupName,
+      );
+      return;
+    }
+    final other = otherId.isEmpty
+        ? null
+        : await authService.watchUser(otherId).first;
     if (!mounted) return;
     await _openChat(
       chatId: chat.id,
@@ -208,12 +438,14 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                     color: Colors.white54,
                   ),
                   title: StreamBuilder<AppUser?>(
-                    stream: otherId.isEmpty
+                    stream: chat.isGroup || otherId.isEmpty
                         ? Stream.value(null)
                         : authService.watchUser(otherId),
                     builder: (context, snapshot) {
                       final user = snapshot.data;
-                      final label = user?.visibleName ?? 'Gizli kayit';
+                      final label = chat.isGroup
+                          ? chat.groupName
+                          : (user?.visibleName ?? 'Gizli kayıt');
                       return Text(
                         label,
                         style: const TextStyle(color: Colors.white70),
@@ -221,7 +453,9 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                     },
                   ),
                   subtitle: Text(
-                    chat.lastMessage.isEmpty ? 'Kayit gizlendi' : chat.lastMessage,
+                    chat.lastMessage.isEmpty
+                        ? 'Kayit gizlendi'
+                        : chat.lastMessage,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white38),
@@ -253,6 +487,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
       if (query.isEmpty) return true;
       final other = users[chat.otherParticipantId(currentUserId)];
       final haystack = [
+        chat.groupName,
         chat.lastMessage,
         other?.email ?? '',
         other?.displayName ?? '',
@@ -310,7 +545,9 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
               ),
               ListTile(
                 leading: Icon(
-                  pref.muted ? Icons.volume_up_outlined : Icons.volume_off_outlined,
+                  pref.muted
+                      ? Icons.volume_up_outlined
+                      : Icons.volume_off_outlined,
                   color: Colors.white70,
                 ),
                 title: Text(
@@ -327,8 +564,14 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.visibility_off_outlined, color: Colors.white70),
-                title: const Text('Gizle', style: TextStyle(color: Colors.white70)),
+                leading: const Icon(
+                  Icons.visibility_off_outlined,
+                  color: Colors.white70,
+                ),
+                title: const Text(
+                  'Gizle',
+                  style: TextStyle(color: Colors.white70),
+                ),
                 onTap: () {
                   Navigator.pop(context);
                   chatService.setHidden(
@@ -339,8 +582,14 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.delete_outline, color: Color(0xFFFF8A80)),
-                title: const Text('Sil', style: TextStyle(color: Color(0xFFFF8A80))),
+                leading: const Icon(
+                  Icons.delete_outline,
+                  color: Color(0xFFFF8A80),
+                ),
+                title: const Text(
+                  'Sil',
+                  style: TextStyle(color: Color(0xFFFF8A80)),
+                ),
                 onTap: () async {
                   Navigator.pop(context);
                   final ok = await _confirm('Bu kayit listeden silinsin mi?');
@@ -388,6 +637,19 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0B0B),
+      floatingActionButton: FloatingActionButton(
+        tooltip: 'Yeni sohbet',
+        backgroundColor: const Color(0xFFEEEEEE),
+        foregroundColor: const Color(0xFF111111),
+        onPressed: _isStarting ? null : _showCreateMenu,
+        child: _isStarting
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.add),
+      ),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0B0B0B),
         foregroundColor: Colors.white70,
@@ -419,11 +681,15 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
             ),
           TextButton.icon(
             onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              );
+              Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const SettingsScreen()));
             },
-            icon: const Icon(Icons.settings_outlined, size: 18, color: Colors.white70),
+            icon: const Icon(
+              Icons.settings_outlined,
+              size: 18,
+              color: Colors.white70,
+            ),
             label: const Text(
               'Ayarlar',
               style: TextStyle(color: Colors.white70),
@@ -444,104 +710,42 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  myEmail,
-                  style: const TextStyle(color: Colors.white38, fontSize: 12),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(color: Colors.white),
+              cursorColor: Colors.white54,
+              decoration: _fieldDecoration('Sohbetlerde ara').copyWith(
+                prefixIcon: const Icon(
+                  Icons.search,
+                  color: Colors.white30,
+                  size: 20,
                 ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Mesaj gonderilecek e-posta',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Karsi tarafin su an acik olmasi gerekmez.',
-                  style: TextStyle(color: Colors.white38, fontSize: 12),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  style: const TextStyle(color: Colors.white),
-                  cursorColor: Colors.white54,
-                  decoration: _fieldDecoration('ornek@mail.com'),
-                  onSubmitted: (_) => _openChatWithEmail(),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    _error!,
-                    style: const TextStyle(color: Color(0xFFFF8A80), fontSize: 13),
-                  ),
-                ],
-                const SizedBox(height: 12),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF2A2A2A),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  onPressed: _isStarting ? null : _openChatWithEmail,
-                  child: _isStarting
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white54,
-                          ),
-                        )
-                      : const Text('Devam'),
-                ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                    side: const BorderSide(color: Colors.white24),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const SettingsScreen(),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.settings_outlined, size: 18),
-                  label: const Text('Ayarlar'),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _searchController,
-                  onChanged: (_) => setState(() {}),
-                  style: const TextStyle(color: Colors.white),
-                  cursorColor: Colors.white54,
-                  decoration: _fieldDecoration('Kayitlarda ara').copyWith(
-                    prefixIcon: const Icon(Icons.search, color: Colors.white30, size: 20),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
           const Divider(height: 1, color: Color(0xFF222222)),
           Expanded(
             child: StreamBuilder<List<PendingThread>>(
               stream: _pendingStream,
+              initialData: chatService.cachedPendingSent(currentUserId),
               builder: (context, pendingSnapshot) {
                 return StreamBuilder<List<ChatRoom>>(
                   stream: _chatsStream,
+                  initialData: chatService.cachedUserChats(currentUserId),
                   builder: (context, chatSnapshot) {
                     return StreamBuilder<Map<String, ChatPref>>(
                       stream: _prefsStream,
+                      initialData: chatService.cachedChatPrefs(currentUserId),
                       builder: (context, prefSnapshot) {
                         if (chatSnapshot.connectionState ==
-                            ConnectionState.waiting) {
+                                ConnectionState.waiting &&
+                            !chatSnapshot.hasData) {
                           return const Center(
-                            child: CircularProgressIndicator(color: Colors.white24),
+                            child: CircularProgressIndicator(
+                              color: Colors.white24,
+                            ),
                           );
                         }
 
@@ -549,7 +753,9 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                         final prefs = prefSnapshot.data ?? {};
                         final pending = pendingSnapshot.data ?? [];
                         final hidden = _hiddenChats(chats, prefs);
-                        final query = _searchController.text.trim().toLowerCase();
+                        final query = _searchController.text
+                            .trim()
+                            .toLowerCase();
                         final visiblePending = pending.where((item) {
                           if (query.isEmpty) return true;
                           return item.recipientEmail.contains(query) ||
@@ -561,9 +767,12 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                             child: Padding(
                               padding: EdgeInsets.all(24),
                               child: Text(
-                                'Henuz kayit yok.\nUstte e-posta girerek baslatin.',
+                                'Henüz sohbet yok.\nYeni bir sohbet için + düğmesine dokunun.',
                                 textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.white38, height: 1.4),
+                                style: TextStyle(
+                                  color: Colors.white38,
+                                  height: 1.4,
+                                ),
                               ),
                             ),
                           );
@@ -571,32 +780,6 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
 
                         return Column(
                           children: [
-                            ListTile(
-                              dense: true,
-                              leading: const Icon(
-                                Icons.settings_outlined,
-                                color: Colors.white38,
-                                size: 20,
-                              ),
-                              title: const Text(
-                                'Ayarlar',
-                                style: TextStyle(
-                                  color: Colors.white54,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              trailing: const Icon(
-                                Icons.chevron_right,
-                                color: Colors.white30,
-                              ),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const SettingsScreen(),
-                                  ),
-                                );
-                              },
-                            ),
                             if (hidden.isNotEmpty)
                               ListTile(
                                 dense: true,
@@ -653,11 +836,17 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                               _GlobalMessageHits(
                                 query: query,
                                 currentUserId: currentUserId,
-                                onOpen: (chat, title) => _openChat(
+                                onOpen: (chat, title, messageId) => _openChat(
                                   chatId: chat.id,
-                                  otherUserId:
-                                      chat.otherParticipantId(currentUserId),
-                                  otherUserName: title,
+                                  otherUserId: chat.otherParticipantId(
+                                    currentUserId,
+                                  ),
+                                  otherUserName: chat.isGroup
+                                      ? chat.groupName
+                                      : title,
+                                  isGroup: chat.isGroup,
+                                  groupName: chat.groupName,
+                                  initialMessageId: messageId,
                                 ),
                               ),
                             if (chats.isNotEmpty)
@@ -670,11 +859,17 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                                   filter: _visibleChats,
                                   onOpen: (chat, title) => _openChat(
                                     chatId: chat.id,
-                                    otherUserId:
-                                        chat.otherParticipantId(currentUserId),
+                                    otherUserId: chat.isGroup
+                                        ? ''
+                                        : chat.otherParticipantId(
+                                            currentUserId,
+                                          ),
                                     otherUserName: title,
-                                    pendingEmail:
-                                        title.contains('@') ? title : null,
+                                    isGroup: chat.isGroup,
+                                    groupName: chat.groupName,
+                                    pendingEmail: title.contains('@')
+                                        ? title
+                                        : null,
                                   ),
                                   onMenu: (chat, pref) => _showChatMenu(
                                     chat: chat,
@@ -738,12 +933,10 @@ class _ChatRecordsList extends StatefulWidget {
     Map<String, ChatPref>,
     String,
     Map<String, AppUser?>,
-  ) filter;
+  )
+  filter;
   final void Function(ChatRoom chat, String title) onOpen;
-  final void Function(
-    ChatRoom chat,
-    ChatPref pref,
-  ) onMenu;
+  final void Function(ChatRoom chat, ChatPref pref) onMenu;
   final Future<void> Function(ChatRoom chat) onHide;
 
   @override
@@ -768,6 +961,7 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
 
   List<String> get _otherIds {
     return widget.chats
+        .where((chat) => !chat.isGroup)
         .map((c) => c.otherParticipantId(widget.currentUserId))
         .where((id) => id.isNotEmpty)
         .toSet()
@@ -781,19 +975,13 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
     _idsKey = key;
     _usersStream = ids.isEmpty
         ? Stream.value(const [])
-        : _combineUsers(context.read<AuthService>(), ids);
+        : context.read<AuthService>().watchUsers(ids);
   }
 
   @override
   Widget build(BuildContext context) {
     final otherIds = _otherIds;
     final typingEnabled = context.watch<SettingsService>().typingEnabled;
-
-    if (otherIds.isEmpty) {
-      return const Center(
-        child: Text('Henuz kayit yok.', style: TextStyle(color: Colors.white38)),
-      );
-    }
 
     return StreamBuilder<List<AppUser?>>(
       stream: _usersStream,
@@ -829,7 +1017,9 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
             final chat = visible[index];
             final otherUserId = chat.otherParticipantId(widget.currentUserId);
             final otherUser = users[otherUserId];
-            final title = otherUser?.visibleName ?? 'Kullanici';
+            final title = chat.isGroup
+                ? (chat.groupName.isEmpty ? 'Adsız grup' : chat.groupName)
+                : (otherUser?.visibleName ?? 'Kullanıcı');
             final pref = widget.prefs[chat.id] ?? ChatPref.empty(chat.id);
             final unread = chat.unreadFor(widget.currentUserId);
 
@@ -842,7 +1032,10 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                   alignment: Alignment.centerRight,
                   child: Padding(
                     padding: EdgeInsets.only(right: 20),
-                    child: Icon(Icons.visibility_off_outlined, color: Colors.white54),
+                    child: Icon(
+                      Icons.visibility_off_outlined,
+                      color: Colors.white54,
+                    ),
                   ),
                 ),
               ),
@@ -854,7 +1047,10 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                 onTap: () => widget.onOpen(chat, title),
                 onLongPress: () => widget.onMenu(chat, pref),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                   child: Row(
                     children: [
                       CircleAvatar(
@@ -876,8 +1072,8 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                           children: [
                             Row(
                               children: [
-                                const Text(
-                                  'Kayit',
+                                Text(
+                                  chat.isGroup ? 'Grup' : 'Kayıt',
                                   style: TextStyle(
                                     color: Colors.white38,
                                     fontSize: 11,
@@ -886,7 +1082,11 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                                 ),
                                 if (pref.pinned) ...[
                                   const SizedBox(width: 6),
-                                  const Icon(Icons.push_pin, size: 12, color: Colors.white38),
+                                  const Icon(
+                                    Icons.push_pin,
+                                    size: 12,
+                                    color: Colors.white38,
+                                  ),
                                 ],
                                 if (pref.muted) ...[
                                   const SizedBox(width: 4),
@@ -906,25 +1106,30 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                               style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.86),
                                 fontSize: 15,
-                                fontWeight: unread > 0 ? FontWeight.w600 : FontWeight.w400,
+                                fontWeight: unread > 0
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
                               ),
                             ),
                             const SizedBox(height: 2),
-                            TickingBuilder(
-                              interval: const Duration(seconds: 2),
+                            Builder(
                               builder: (_) {
                                 final nowTyping =
-                                    typingEnabled && chat.isOtherTyping(otherUserId);
+                                    !chat.isGroup &&
+                                    typingEnabled &&
+                                    chat.isOtherTyping(otherUserId);
                                 return Text(
                                   nowTyping
                                       ? 'Yaziyor...'
                                       : (chat.lastMessage.isEmpty
-                                          ? 'Kayit olusturuldu'
-                                          : chat.lastMessage),
+                                            ? 'Kayit olusturuldu'
+                                            : chat.lastMessage),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    color: nowTyping ? Colors.white54 : Colors.white38,
+                                    color: nowTyping
+                                        ? Colors.white54
+                                        : Colors.white38,
                                     fontSize: 13,
                                     fontStyle: nowTyping
                                         ? FontStyle.italic
@@ -942,13 +1147,19 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                         children: [
                           Text(
                             ChatFormat.listTime(chat.lastMessageAt),
-                            style: const TextStyle(color: Colors.white30, fontSize: 12),
+                            style: const TextStyle(
+                              color: Colors.white30,
+                              fontSize: 12,
+                            ),
                           ),
                           if (unread > 0) ...[
                             const SizedBox(height: 6),
                             Container(
                               constraints: const BoxConstraints(minWidth: 20),
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
                               decoration: BoxDecoration(
                                 color: const Color(0xFF3A3A3A),
                                 borderRadius: BorderRadius.circular(10),
@@ -976,25 +1187,6 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
       },
     );
   }
-
-  Stream<List<AppUser?>> _combineUsers(AuthService auth, List<String> ids) {
-    if (ids.isEmpty) return Stream.value(const []);
-    return Stream.multi((controller) {
-      final latest = List<AppUser?>.filled(ids.length, null);
-      final subs = <StreamSubscription<AppUser?>>[];
-      for (var i = 0; i < ids.length; i++) {
-        subs.add(auth.watchUser(ids[i]).listen((user) {
-          latest[i] = user;
-          controller.add(List<AppUser?>.from(latest));
-        }));
-      }
-      controller.onCancel = () {
-        for (final sub in subs) {
-          sub.cancel();
-        }
-      };
-    });
-  }
 }
 
 class _GlobalMessageHits extends StatelessWidget {
@@ -1006,15 +1198,15 @@ class _GlobalMessageHits extends StatelessWidget {
 
   final String query;
   final String currentUserId;
-  final void Function(ChatRoom chat, String title) onOpen;
+  final void Function(ChatRoom chat, String title, String messageId) onOpen;
 
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<List<({ChatRoom chat, ChatMessage message})>>(
       future: context.read<ChatService>().searchAllChats(
-            userId: currentUserId,
-            query: query,
-          ),
+        userId: currentUserId,
+        query: query,
+      ),
       builder: (context, snapshot) {
         final hits = snapshot.data ?? const [];
         if (hits.isEmpty) return const SizedBox.shrink();
@@ -1041,7 +1233,7 @@ class _GlobalMessageHits extends StatelessWidget {
                   ChatFormat.eventDateTime(hit.message.createdAt),
                   style: const TextStyle(color: Colors.white30, fontSize: 11),
                 ),
-                onTap: () => onOpen(hit.chat, 'Sohbet'),
+                onTap: () => onOpen(hit.chat, 'Sohbet', hit.message.id),
               );
             }),
           ],

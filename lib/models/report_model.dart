@@ -37,6 +37,8 @@ class MessageReport {
     this.action = '',
     this.transcript = '',
     this.history = const [],
+    this.isGroup = false,
+    this.groupName = '',
   });
 
   final String id;
@@ -53,6 +55,8 @@ class MessageReport {
   final String action;
   final String transcript;
   final List<Map<String, dynamic>> history;
+  final bool isGroup;
+  final String groupName;
 
   factory MessageReport.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
@@ -78,9 +82,11 @@ class MessageReport {
       transcript: data['transcript'] as String? ?? '',
       history: List<Map<String, dynamic>>.from(
         (data['history'] as List? ?? []).whereType<Map>().map(
-              (item) => Map<String, dynamic>.from(item),
-            ),
+          (item) => Map<String, dynamic>.from(item),
+        ),
       ),
+      isGroup: data['isGroup'] as bool? ?? false,
+      groupName: data['groupName'] as String? ?? '',
     );
   }
 }
@@ -118,14 +124,16 @@ List<ReportedUserGroup> groupReportsByUser(List<MessageReport> reports) {
     final key = report.reportedEmail.isNotEmpty
         ? report.reportedEmail
         : (report.reportedUserId.isNotEmpty
-            ? report.reportedUserId
-            : report.id);
+              ? report.reportedUserId
+              : report.id);
     map.putIfAbsent(key, () => []).add(report);
   }
   final groups = map.entries.map((entry) {
     final items = [...entry.value]
-      ..sort((a, b) => (b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-          .compareTo(a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)));
+      ..sort(
+        (a, b) => (b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)),
+      );
     return ReportedUserGroup(
       userId: items.first.reportedUserId,
       email: items.first.reportedEmail,
@@ -136,9 +144,9 @@ List<ReportedUserGroup> groupReportsByUser(List<MessageReport> reports) {
     if (a.pendingCount != b.pendingCount) {
       return b.pendingCount.compareTo(a.pendingCount);
     }
-    return (b.latestAt ?? DateTime.fromMillisecondsSinceEpoch(0))
-        .compareTo(a.latestAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+    return (b.latestAt ?? DateTime.fromMillisecondsSinceEpoch(0)).compareTo(
+      a.latestAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+    );
   });
   return groups;
 }
-

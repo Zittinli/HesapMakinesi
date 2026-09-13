@@ -7,13 +7,12 @@ import '../core/admin_config.dart';
 import '../models/message_model.dart';
 import '../models/moderation_model.dart';
 import '../models/report_model.dart';
+import 'chat_service.dart';
 
 class ModerationService {
-  ModerationService({
-    FirebaseFirestore? firestore,
-    FirebaseAuth? auth,
-  })  : _firestore = firestore ?? FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+  ModerationService({FirebaseFirestore? firestore, FirebaseAuth? auth})
+    : _firestore = firestore ?? FirebaseFirestore.instance,
+      _auth = auth ?? FirebaseAuth.instance;
 
   final FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
@@ -96,15 +95,18 @@ class ModerationService {
     final user = _auth.currentUser;
     if (user == null) return;
     if (message.senderId == user.uid) return;
+    final context = await _reportContext(chatId, reportedUserId);
 
     await _createReport(
       reporter: user,
       chatId: chatId,
       reportedUserId: reportedUserId,
-      reportedEmail: reportedEmail,
+      reportedEmail: context.email.isNotEmpty ? context.email : reportedEmail,
       reason: reason,
       messageId: message.id,
       messageText: message.text,
+      isGroup: context.isGroup,
+      groupName: context.groupName,
     );
   }
 
@@ -119,6 +121,7 @@ class ModerationService {
     final user = _auth.currentUser;
     if (user == null) return;
     if (reportedUserId == user.uid) return;
+    final context = await _reportContext(chatId, reportedUserId);
 
     final history = await _snapshotHistory(chatId, reportedMessageId: '');
     Map<String, dynamic>? lastFromReported;
@@ -132,13 +135,36 @@ class ModerationService {
       reporter: user,
       chatId: chatId,
       reportedUserId: reportedUserId,
-      reportedEmail: reportedEmail,
+      reportedEmail: context.email.isNotEmpty ? context.email : reportedEmail,
       reason: reason,
       messageId: (lastFromReported?['messageId'] as String? ?? '').isEmpty
           ? 'kisi-bildirimi'
           : lastFromReported!['messageId'] as String,
       messageText: lastFromReported?['text'] as String? ?? '',
+      isGroup: context.isGroup,
+      groupName: context.groupName,
     );
+  }
+
+  Future<({String email, bool isGroup, String groupName})> _reportContext(
+    String chatId,
+    String reportedUserId,
+  ) async {
+    try {
+      final results = await Future.wait([
+        _firestore.collection('users').doc(reportedUserId).get(),
+        _firestore.collection('chats').doc(chatId).get(),
+      ]);
+      final userData = results[0].data();
+      final chatData = results[1].data();
+      return (
+        email: userData?['email'] as String? ?? '',
+        isGroup: chatData?['isGroup'] as bool? ?? false,
+        groupName: chatData?['groupName'] as String? ?? '',
+      );
+    } catch (_) {
+      return (email: '', isGroup: false, groupName: '');
+    }
   }
 
   Future<void> _createReport({
@@ -149,8 +175,13 @@ class ModerationService {
     required ReportReason reason,
     required String messageId,
     required String messageText,
+    bool isGroup = false,
+    String groupName = '',
   }) async {
-    final history = await _snapshotHistory(chatId, reportedMessageId: messageId);
+    final history = await _snapshotHistory(
+      chatId,
+      reportedMessageId: messageId,
+    );
     final transcript = _formatTranscript(
       history,
       reporterId: reporter.uid,
@@ -175,6 +206,10 @@ class ModerationService {
       'history': history,
       'transcript': transcript,
       'historyCount': history.length,
+      'isGroup': isGroup,
+      'groupName': groupName.length > 80
+          ? groupName.substring(0, 80)
+          : groupName,
     });
 
     if (history.isNotEmpty) {
@@ -250,9 +285,7 @@ class ModerationService {
         .orderBy('createdAt', descending: true)
         .limit(200)
         .snapshots()
-        .map(
-          (snap) => snap.docs.map(MessageReport.fromFirestore).toList(),
-        );
+        .map((snap) => snap.docs.map(MessageReport.fromFirestore).toList());
   }
 
   Future<void> markReportReviewed(String reportId, {String action = ''}) {
@@ -315,5 +348,22 @@ class ModerationService {
       batch.delete(_bannedEmails.doc(emailDocId(email)));
     }
     await batch.commit();
+  }
+
+  Future<void> removeReportedUserFromGroup({
+    required String chatId,
+    required String userId,
+  }) async {
+    if (!isAdmin) throw StateError('Bu işlem için yetki yok.');
+    await ChatService(
+      firestore: _firestore,
+    ).appAdminRemoveFromGroup(chatId: chatId, userId: userId);
+  }
+
+  Future<int> removeReportedUserFromAllGroups(String userId) async {
+    if (!isAdmin) throw StateError('Bu işlem için yetki yok.');
+    return ChatService(
+      firestore: _firestore,
+    ).appAdminRemoveFromAllGroups(userId);
   }
 }

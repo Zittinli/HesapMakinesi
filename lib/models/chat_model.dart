@@ -7,6 +7,11 @@ class ChatRoom {
     required this.lastMessage,
     required this.lastMessageAt,
     required this.lastMessageSenderId,
+    this.isGroup = false,
+    this.groupName = '',
+    this.createdBy = '',
+    this.adminIds = const [],
+    this.createdAt,
     this.unreadCounts = const {},
     this.typing = const {},
     this.blockedBy = const [],
@@ -17,6 +22,11 @@ class ChatRoom {
   final String lastMessage;
   final DateTime? lastMessageAt;
   final String lastMessageSenderId;
+  final bool isGroup;
+  final String groupName;
+  final String createdBy;
+  final List<String> adminIds;
+  final DateTime? createdAt;
   final Map<String, int> unreadCounts;
   final Map<String, DateTime> typing;
   final List<String> blockedBy;
@@ -48,6 +58,11 @@ class ChatRoom {
       lastMessage: data['lastMessage'] as String? ?? '',
       lastMessageAt: (data['lastMessageAt'] as Timestamp?)?.toDate(),
       lastMessageSenderId: data['lastMessageSenderId'] as String? ?? '',
+      isGroup: data['isGroup'] as bool? ?? false,
+      groupName: data['groupName'] as String? ?? '',
+      createdBy: data['createdBy'] as String? ?? '',
+      adminIds: List<String>.from(data['adminIds'] as List? ?? const []),
+      createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
       unreadCounts: unreadCounts,
       typing: typing,
       blockedBy: List<String>.from(data['blockedBy'] as List? ?? []),
@@ -61,11 +76,28 @@ class ChatRoom {
     );
   }
 
+  String titleFor(String currentUserId, {String fallback = 'Sohbet'}) {
+    if (isGroup && groupName.trim().isNotEmpty) return groupName.trim();
+    return fallback;
+  }
+
   int unreadFor(String userId) => unreadCounts[userId] ?? 0;
+
+  /// Legacy groups used only [createdBy] to identify their administrator.
+  List<String> get effectiveAdminIds {
+    if (adminIds.isNotEmpty) return List<String>.unmodifiable(adminIds);
+    if (isGroup && createdBy.isNotEmpty) return [createdBy];
+    return const [];
+  }
+
+  bool isAdmin(String userId) => effectiveAdminIds.contains(userId);
 
   bool isBlocked() => blockedBy.isNotEmpty;
 
-  bool isOtherTyping(String otherUserId, {Duration window = const Duration(seconds: 8)}) {
+  bool isOtherTyping(
+    String otherUserId, {
+    Duration window = const Duration(seconds: 8),
+  }) {
     final at = typing[otherUserId];
     if (at == null) return false;
     return DateTime.now().difference(at) <= window;

@@ -9,10 +9,7 @@ import '../chat/chat_screen.dart';
 import '../users/user_search_screen.dart';
 
 class ChatListScreen extends StatelessWidget {
-  const ChatListScreen({
-    super.key,
-    required this.onExitToCalculator,
-  });
+  const ChatListScreen({super.key, required this.onExitToCalculator});
 
   final VoidCallback onExitToCalculator;
 
@@ -73,12 +70,16 @@ class ChatListScreen extends StatelessWidget {
               final otherUserId = chat.otherParticipantId(currentUserId);
 
               return StreamBuilder<AppUser?>(
-                stream: authService.watchUser(otherUserId),
+                stream: chat.isGroup
+                    ? Stream.value(null)
+                    : authService.watchUser(otherUserId),
                 builder: (context, userSnapshot) {
                   final otherUser = userSnapshot.data;
-                  final title = otherUser?.displayName.isNotEmpty == true
-                      ? otherUser!.displayName
-                      : otherUser?.email ?? 'Kullanici';
+                  final title = chat.isGroup
+                      ? (chat.groupName.isEmpty ? 'Adsız grup' : chat.groupName)
+                      : (otherUser?.displayName.isNotEmpty == true
+                            ? otherUser!.displayName
+                            : otherUser?.email ?? 'Kullanıcı');
 
                   return ListTile(
                     title: Text(title),
@@ -92,10 +93,11 @@ class ChatListScreen extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        Text(
-                          _formatLastSeen(otherUser),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
+                        if (!chat.isGroup)
+                          Text(
+                            _formatLastSeen(otherUser),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
                       ],
                     ),
                     trailing: chat.lastMessageAt != null
@@ -109,8 +111,10 @@ class ChatListScreen extends StatelessWidget {
                         MaterialPageRoute(
                           builder: (_) => ChatScreen(
                             chatId: chat.id,
-                            otherUserId: otherUserId,
+                            otherUserId: chat.isGroup ? '' : otherUserId,
                             otherUserName: title,
+                            isGroup: chat.isGroup,
+                            groupName: chat.groupName,
                             onExitToCalculator: onExitToCalculator,
                           ),
                         ),
@@ -125,9 +129,9 @@ class ChatListScreen extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const UserSearchScreen()),
-          );
+          Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const UserSearchScreen()));
         },
         child: const Icon(Icons.add),
       ),

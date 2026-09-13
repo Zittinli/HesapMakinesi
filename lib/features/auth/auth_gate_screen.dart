@@ -9,7 +9,6 @@ import '../../services/moderation_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/presence_service.dart';
 import '../../services/settings_service.dart';
-import '../../models/user_model.dart';
 import '../chat/secret_hub_screen.dart';
 import 'email_verify_screen.dart';
 import 'login_screen.dart';
@@ -53,6 +52,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
 
     return StreamBuilder<User?>(
       stream: authService.authStateChanges(),
+      initialData: authService.currentUser,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
@@ -68,33 +68,19 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
           return const LoginScreen();
         }
 
-        return StreamBuilder<AppUser?>(
-          stream: authService.watchUser(user.uid),
-          builder: (context, userSnap) {
-            if (!userSnap.hasData &&
-                userSnap.connectionState == ConnectionState.waiting) {
-              return const Scaffold(
-                backgroundColor: Color(0xFF0B0B0B),
-                body: Center(
-                  child: CircularProgressIndicator(color: Colors.white24),
-                ),
-              );
-            }
-            if (authService.requiresEmailVerification) {
-              _presenceService?.stop();
-              _presenceService = null;
-              context.read<NotificationService>().setHubOpen(false);
-              return const EmailVerifyScreen();
-            }
+        if (authService.requiresEmailVerification) {
+          _presenceService?.stop();
+          _presenceService = null;
+          context.read<NotificationService>().setHubOpen(false);
+          return const EmailVerifyScreen();
+        }
 
-            _presenceService ??= PresenceService(
-              settings: context.read<SettingsService>(),
-            )..start();
-            context.read<NotificationService>().setHubOpen(true);
+        _presenceService ??= PresenceService(
+          settings: context.read<SettingsService>(),
+        )..start();
+        context.read<NotificationService>().setHubOpen(true);
 
-            return _verifiedHome(context, user);
-          },
-        );
+        return _verifiedHome(context, user);
       },
     );
   }
