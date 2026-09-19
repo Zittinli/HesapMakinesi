@@ -1,4 +1,5 @@
 {
+  "task.allowAutomaticTasks": "on",
   "dart.flutterSdkPath": "C:\\Users\\zttnl\\Yazilim\\flutter",
   "dart.debugExternalPackageLibraries": false,
   "dart.debugSdkLibraries": false,

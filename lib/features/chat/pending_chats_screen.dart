@@ -48,7 +48,7 @@ class PendingChatsScreen extends StatelessWidget {
                   title: Text(item.recipientEmail),
                   subtitle: Text(
                     item.lastMessage.isEmpty
-                        ? 'Cevrimdisi iletilecek'
+                        ? 'Çevrimdışı iletilecek'
                         : item.lastMessage,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,

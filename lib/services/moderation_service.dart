@@ -304,11 +304,11 @@ class ModerationService {
     bool permanent = false,
   }) async {
     if (AdminConfig.isAdminEmail(email)) {
-      throw StateError('Yonetici hesaba ceza uygulanamaz.');
+      throw StateError('Yönetici hesaba ceza uygulanamaz.');
     }
     final admin = _auth.currentUser;
     if (admin == null || !isAdmin) {
-      throw StateError('Bu islem icin yetki yok.');
+      throw StateError('Bu işlem için yetki yok.');
     }
 
     final payload = <String, dynamic>{
@@ -338,7 +338,7 @@ class ModerationService {
   }) async {
     final admin = _auth.currentUser;
     if (admin == null || !isAdmin) {
-      throw StateError('Bu islem icin yetki yok.');
+      throw StateError('Bu işlem için yetki yok.');
     }
     final batch = _firestore.batch();
     if (userId.isNotEmpty) {

@@ -11,21 +11,21 @@ void main() {
 
     expect(copy, isNotNull);
     expect(copy!.title, 'HesapMakinesi');
-    expect(copy.body, 'Son islem kaydedildi');
+    expect(copy.body, 'Son işlem kaydedildi');
   });
 
-  test('tam gorunum gonderen ve metni gosterir', () {
+  test('tam görünüm gönderen ve metni gösterir', () {
     final copy = NotificationCopy.of(
       look: NotificationLook.preview,
       sender: 'Ahmet',
-      preview: 'Yarin gorusuruz',
+      preview: 'Yarın görüşürüz',
     );
 
     expect(copy!.title, 'Ahmet');
-    expect(copy.body, 'Yarin gorusuruz');
+    expect(copy.body, 'Yarın görüşürüz');
   });
 
-  test('kapali gorunum bildirim uretmez', () {
+  test('kapalı görünüm bildirim uretmez', () {
     expect(
       NotificationCopy.of(
         look: NotificationLook.off,

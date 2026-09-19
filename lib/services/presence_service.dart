@@ -66,7 +66,7 @@ class PresenceService with WidgetsBindingObserver {
     } on FirebaseException catch (error) {
       // Oturum kapanirken ya da kullanici belgesi henuz yokken yazma
       // reddedilebilir; durum bilgisi kritik degil, uygulamayi dusurmemeli.
-      debugPrint('Presence yazilamadi: ${error.code}');
+      debugPrint('Presence yazılamadı: ${error.code}');
     }
   }
 }

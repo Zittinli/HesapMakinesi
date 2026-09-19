@@ -58,17 +58,17 @@ class ChatFormat {
     final local = time.toLocal();
     final current = now ?? DateTime.now();
     final minutes = current.difference(local).inMinutes;
-    if (minutes < 2) return 'Son aktif: az once';
+    if (minutes < 2) return 'Son aktif: az önce';
     final today = DateTime(current.year, current.month, current.day);
     final day = DateTime(local.year, local.month, local.day);
     final diff = today.difference(day).inDays;
     final clock = DateFormat('HH:mm').format(local);
-    if (diff == 0) return 'Son gorulme: $clock';
-    if (diff == 1) return 'Son gorulme: Dün $clock';
+    if (diff == 0) return 'Son görülme: $clock';
+    if (diff == 1) return 'Son görülme: Dün $clock';
     if (local.year == current.year) {
-      return 'Son gorulme: ${DateFormat('dd.MM').format(local)} $clock';
+      return 'Son görülme: ${DateFormat('dd.MM').format(local)} $clock';
     }
-    return 'Son gorulme: ${DateFormat('dd.MM.yy').format(local)} $clock';
+    return 'Son görülme: ${DateFormat('dd.MM.yy').format(local)} $clock';
   }
 
   static bool isSameDay(DateTime? a, DateTime? b) {

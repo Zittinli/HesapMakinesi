@@ -105,7 +105,7 @@ class _ChatSearchScreenState extends State<ChatSearchScreen> {
           : hits.isEmpty
           ? Center(
               child: Text(
-                query.isEmpty ? 'Kelime yazin.' : 'Sonuc yok.',
+                query.isEmpty ? 'Kelime yazın.' : 'Sonuc yok.',
                 style: const TextStyle(color: Colors.white38),
               ),
             )

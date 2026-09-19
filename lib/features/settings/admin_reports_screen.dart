@@ -16,7 +16,7 @@ class AdminReportsScreen extends StatelessWidget {
         backgroundColor: const Color(0xFF0B0B0B),
         foregroundColor: Colors.white70,
         elevation: 0,
-        title: const Text('Bildirilen kullanicilar'),
+        title: const Text('Bildirilen kullanıcılar'),
       ),
       body: const AdminReportsList(),
     );
@@ -38,7 +38,7 @@ class AdminReportsList extends StatelessWidget {
             child: Padding(
               padding: EdgeInsets.all(24),
               child: Text(
-                'Raporlar okunamadi. Bu hesap yonetici e-postasi olmali.',
+                'Raporlar okunamadı. Yönetici oturumunu kapatıp tekrar gir.',
                 style: TextStyle(color: Colors.white38),
                 textAlign: TextAlign.center,
               ),
@@ -54,7 +54,7 @@ class AdminReportsList extends StatelessWidget {
         if (groups.isEmpty) {
           return const Center(
             child: Text(
-              'Henuz bildirim yok.',
+              'Henüz bildirim yok.',
               style: TextStyle(color: Colors.white38),
             ),
           );
@@ -110,9 +110,9 @@ class _ReportedUserTile extends StatelessWidget {
               _userActionChip(context, '1 saat', const Duration(hours: 1)),
               _userActionChip(context, '24 saat', const Duration(hours: 24)),
               _userActionChip(context, '7 gun', const Duration(days: 7)),
-              _userActionChip(context, 'Kalici ban', null, permanent: true),
+              _userActionChip(context, 'Kalıcı ban', null, permanent: true),
               ActionChip(
-                label: const Text('Cezayi kaldir'),
+                label: const Text('Cezayi kaldır'),
                 onPressed: () => _clear(context),
                 backgroundColor: const Color(0xFF161616),
                 labelStyle: const TextStyle(
@@ -283,7 +283,7 @@ class _ReportTile extends StatelessWidget {
             ),
           if (report.action.isNotEmpty)
             Text(
-              'Islem: ${report.action}',
+              'İşlem: ${report.action}',
               style: const TextStyle(color: Colors.white38, fontSize: 12),
             ),
           if (report.transcript.isNotEmpty) ...[

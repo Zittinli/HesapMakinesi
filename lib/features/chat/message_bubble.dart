@@ -1,7 +1,9 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/chat_format.dart';
+import '../../core/chat_links.dart';
 import '../../core/ticking_builder.dart';
 import '../../models/message_model.dart';
 
@@ -14,7 +16,9 @@ class MessageBubble extends StatelessWidget {
     this.senderLabel,
     this.onLongPress,
     this.onMediaTap,
+    this.onReplyTap,
     this.highlighted = false,
+    this.pending = false,
   });
 
   final ChatMessage message;
@@ -23,7 +27,9 @@ class MessageBubble extends StatelessWidget {
   final String? senderLabel;
   final VoidCallback? onLongPress;
   final VoidCallback? onMediaTap;
+  final VoidCallback? onReplyTap;
   final bool highlighted;
+  final bool pending;
 
   @override
   Widget build(BuildContext context) {
@@ -33,6 +39,7 @@ class MessageBubble extends StatelessWidget {
         : isMine
         ? const Color(0xFF2A2A2A)
         : const Color(0xFF161616);
+    final links = ChatLinks.extract(message.text);
 
     return Align(
       alignment: alignment,
@@ -72,22 +79,28 @@ class MessageBubble extends StatelessWidget {
               ],
               if (message.replyToText != null &&
                   message.replyToText!.isNotEmpty)
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(bottom: 6),
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF111111),
-                    borderRadius: BorderRadius.circular(8),
-                    border: const Border(
-                      left: BorderSide(color: Color(0xFF666666), width: 2),
+                GestureDetector(
+                  onTap: onReplyTap,
+                  child: Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111111),
+                      borderRadius: BorderRadius.circular(8),
+                      border: const Border(
+                        left: BorderSide(color: Color(0xFF666666), width: 2),
+                      ),
                     ),
-                  ),
-                  child: Text(
-                    message.replyToText!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    child: Text(
+                      message.replyToText!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
                 ),
               if (message.hasMedia)
@@ -97,21 +110,25 @@ class MessageBubble extends StatelessWidget {
                       ? const _VideoThumb()
                       : ClipRRect(
                           borderRadius: BorderRadius.circular(10),
-                          child: CachedNetworkImage(
-                            imageUrl: message.mediaUrl!,
-                            width: 180,
-                            height: 180,
-                            fit: BoxFit.cover,
-                            memCacheWidth: 360,
-                            memCacheHeight: 360,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxWidth: 240,
+                              maxHeight: 280,
+                            ),
+                            child: CachedNetworkImage(
+                              imageUrl: message.mediaUrl!,
+                              fit: BoxFit.contain,
+                              memCacheWidth: 720,
+                            ),
                           ),
                         ),
                 )
-              else
-                Text(
-                  message.text,
-                  style: const TextStyle(color: Colors.white, fontSize: 15),
-                ),
+              else if (message.text.isNotEmpty)
+                _LinkText(text: message.text, links: links),
+              if (links.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                ...links.map((link) => _LinkCard(link: link)),
+              ],
               const SizedBox(height: 4),
               if (message.expiresAt != null)
                 TickingBuilder(
@@ -119,6 +136,7 @@ class MessageBubble extends StatelessWidget {
                     message: message,
                     isMine: isMine,
                     isRead: isRead,
+                    pending: pending,
                   ),
                 )
               else
@@ -126,8 +144,102 @@ class MessageBubble extends StatelessWidget {
                   message: message,
                   isMine: isMine,
                   isRead: isRead,
+                  pending: pending,
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LinkText extends StatelessWidget {
+  const _LinkText({required this.text, required this.links});
+
+  final String text;
+  final List<ChatLink> links;
+
+  @override
+  Widget build(BuildContext context) {
+    if (links.isEmpty) {
+      return Text(
+        text,
+        style: const TextStyle(color: Colors.white, fontSize: 15),
+      );
+    }
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final link in links) {
+      if (link.start > cursor) {
+        spans.add(TextSpan(text: text.substring(cursor, link.start)));
+      }
+      final raw = link.raw;
+      spans.add(
+        TextSpan(
+          text: raw,
+          style: const TextStyle(
+            color: Color(0xFFB0BEC5),
+            fontStyle: FontStyle.italic,
+            decoration: TextDecoration.underline,
+            decorationColor: Color(0xFF78909C),
+            fontSize: 15,
+          ),
+          recognizer: TapGestureRecognizer()..onTap = () => ChatLinks.open(raw),
+        ),
+      );
+      cursor = link.end;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor)));
+    }
+    return Text.rich(
+      TextSpan(
+        style: const TextStyle(color: Colors.white, fontSize: 15),
+        children: spans,
+      ),
+    );
+  }
+}
+
+class _LinkCard extends StatelessWidget {
+  const _LinkCard({required this.link});
+
+  final ChatLink link;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: const Color(0xFF111111),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: () => ChatLinks.open(link.raw),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  link.label == 'Instagram'
+                      ? Icons.camera_alt_outlined
+                      : link.label == 'TikTok'
+                      ? Icons.music_note_outlined
+                      : Icons.link,
+                  size: 16,
+                  color: Colors.white54,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    link.label,
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -140,11 +252,13 @@ class _MessageStatus extends StatelessWidget {
     required this.message,
     required this.isMine,
     required this.isRead,
+    required this.pending,
   });
 
   final ChatMessage message;
   final bool isMine;
   final bool isRead;
+  final bool pending;
 
   @override
   Widget build(BuildContext context) {
@@ -174,7 +288,7 @@ class _MessageStatus extends StatelessWidget {
         ],
         if (message.wasEdited) ...[
           const Text(
-            'duzenlendi',
+            'düzenlendi',
             style: TextStyle(color: Colors.white30, fontSize: 11),
           ),
           const SizedBox(width: 6),
@@ -183,7 +297,7 @@ class _MessageStatus extends StatelessWidget {
           ChatFormat.messageTime(message.createdAt),
           style: const TextStyle(color: Colors.white30, fontSize: 11),
         ),
-        if (isMine) ...[
+        if (isMine && !pending) ...[
           const SizedBox(width: 4),
           Icon(
             isRead ? Icons.done_all : Icons.done,
@@ -201,20 +315,22 @@ class _VideoThumb extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 180,
-      height: 120,
-      decoration: BoxDecoration(
-        color: const Color(0xFF090909),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: const Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.play_circle_fill, color: Colors.white70, size: 46),
-          SizedBox(height: 6),
-          Text('Video', style: TextStyle(color: Colors.white54, fontSize: 12)),
-        ],
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 240),
+        decoration: BoxDecoration(
+          color: const Color(0xFF090909),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.play_circle_fill, color: Colors.white70, size: 46),
+            SizedBox(height: 6),
+            Text('Video', style: TextStyle(color: Colors.white54, fontSize: 12)),
+          ],
+        ),
       ),
     );
   }

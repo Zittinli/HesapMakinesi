@@ -39,12 +39,12 @@ class _UserSearchScreenState extends State<UserSearchScreen> {
 
       final user = await authService.findUserByEmail(email);
       if (user == null) {
-        setState(() => _error = 'Bu e-posta ile kullanici bulunamadi.');
+        setState(() => _error = 'Bu e-posta ile kullanıcı bulunamadı.');
         return;
       }
 
       if (user.id == currentUserId) {
-        setState(() => _error = 'Kendinizle sohbet baslatamazsiniz.');
+        setState(() => _error = 'Kendinizle sohbet başlatamazsınız.');
         return;
       }
 
@@ -75,7 +75,7 @@ class _UserSearchScreenState extends State<UserSearchScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Kullanici Ara')),
+      appBar: AppBar(title: const Text('Kullanıcı Ara')),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(

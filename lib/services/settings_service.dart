@@ -27,6 +27,7 @@ class SettingsService extends ChangeNotifier {
   static const _keyScreenProtection = 'privacy_screen_protection';
   static const _keyTheme = 'calculator_theme';
   static const _keyHistory = 'calculator_history';
+  static const _keyIdleSeconds = 'chat_idle_seconds';
 
   static const allowedOperators = ['×', '+', '-', '÷'];
 
@@ -40,7 +41,8 @@ class SettingsService extends ChangeNotifier {
   bool _readReceiptsEnabled = true;
   bool _lastSeenEnabled = true;
   bool _screenProtectionEnabled = false;
-  CalculatorSkin _calculatorSkin = CalculatorSkin.classic;
+  CalculatorSkin _calculatorSkin = CalculatorSkin.samsung;
+  int _chatIdleSeconds = 150;
   List<String> _calculatorHistory = [];
   bool _ready = false;
 
@@ -56,6 +58,8 @@ class SettingsService extends ChangeNotifier {
   bool get lastSeenEnabled => _lastSeenEnabled;
   bool get screenProtectionEnabled => _screenProtectionEnabled;
   CalculatorSkin get calculatorSkin => _calculatorSkin;
+  int get chatIdleSeconds => _chatIdleSeconds;
+  bool get showIdleCountdown => false;
   List<String> get calculatorHistory => List.unmodifiable(_calculatorHistory);
   bool get ready => _ready;
 
@@ -78,9 +82,13 @@ class SettingsService extends ChangeNotifier {
     _readReceiptsEnabled = prefs.getBool(_keyReadReceipts) ?? true;
     _lastSeenEnabled = prefs.getBool(_keyLastSeen) ?? true;
     _screenProtectionEnabled = prefs.getBool(_keyScreenProtection) ?? false;
-    _calculatorSkin = CalculatorSkinX.fromId(prefs.getString(_keyTheme));
+    _calculatorSkin = CalculatorSkinX.fromId(
+      prefs.getString(_keyTheme) ?? CalculatorSkin.samsung.id,
+    );
+    _chatIdleSeconds = prefs.getInt(_keyIdleSeconds) ?? 150;
+    if (_chatIdleSeconds < 30) _chatIdleSeconds = 30;
+    if (_chatIdleSeconds > 1800) _chatIdleSeconds = 1800;
     _calculatorHistory = prefs.getStringList(_keyHistory) ?? [];
-    await _syncLauncherIcon();
     await _syncScreenProtection();
     _ready = true;
     notifyListeners();
@@ -94,13 +102,13 @@ class SettingsService extends ChangeNotifier {
     final cleanLeft = left.replaceAll(RegExp(r'[^0-9]'), '');
     final cleanRight = right.replaceAll(RegExp(r'[^0-9]'), '');
     if (cleanLeft.isEmpty || cleanRight.isEmpty) {
-      return 'Her iki sayi da gerekli.';
+      return 'Her iki sayı da gerekli.';
     }
     if (cleanLeft.length > 12 || cleanRight.length > 12) {
-      return 'Sayilar en fazla 12 haneli olabilir.';
+      return 'Sayılar en fazla 12 haneli olabilir.';
     }
     if (!allowedOperators.contains(operator)) {
-      return 'Gecersiz islem.';
+      return 'Geçersiz işlem.';
     }
 
     _unlockLeft = cleanLeft;
@@ -146,6 +154,13 @@ class SettingsService extends ChangeNotifier {
     _readReceiptsEnabled = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyReadReceipts, value);
+    notifyListeners();
+  }
+
+  Future<void> setChatIdleSeconds(int seconds) async {
+    _chatIdleSeconds = seconds.clamp(30, 1800);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keyIdleSeconds, _chatIdleSeconds);
     notifyListeners();
   }
 

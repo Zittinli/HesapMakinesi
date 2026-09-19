@@ -27,7 +27,7 @@ class EmailCheckService {
       });
     } on FirebaseFunctionsException catch (_) {
       throw const EmailCheckException(
-        'E-posta dogrulanamadi. Baglantini kontrol edip tekrar dene.',
+        'E-posta doğrulanamadı. Bağlantını kontrol edip tekrar dene.',
       );
     }
 
@@ -40,13 +40,13 @@ class EmailCheckService {
   String _messageFor(String reason) {
     switch (reason) {
       case 'format':
-        return 'E-posta adresi gecerli bir bicimde degil.';
+        return 'E-posta adresi geçerli bir biçimde değil.';
       case 'disposable':
-        return 'Tek kullanimlik e-posta adresleriyle kayit olunamaz.';
+        return 'Tek kullanımlık e-posta adresleriyle kayıt olunamaz.';
       case 'no_mx':
-        return 'Bu e-posta alan adi mesaj kabul etmiyor. Gercek bir adres gir.';
+        return 'Bu e-posta alan adı mesaj kabul etmiyor. Gerçek bir adres gir.';
       default:
-        return 'E-posta adresi dogrulanamadi.';
+        return 'E-posta adresi doğrulanamadı.';
     }
   }
 }

@@ -41,7 +41,7 @@ class StorageService {
       await ref.putFile(file, SettableMetadata(contentType: contentType));
       return await ref.getDownloadURL();
     } on FirebaseException catch (error) {
-      throw MediaUploadException('Medya yuklenemedi (${error.code}).');
+      throw MediaUploadException('Medya yüklenemedi (${error.code}).');
     }
   }
 

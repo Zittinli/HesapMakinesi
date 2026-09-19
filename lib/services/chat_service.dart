@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/chat_model.dart';
@@ -7,11 +9,25 @@ import '../core/search_tokens.dart';
 import '../models/pending_thread_model.dart';
 
 class ChatBlockedException implements Exception {
-  const ChatBlockedException([this.message = 'Bu yazisma engellenmis.']);
+  const ChatBlockedException([this.message = 'Bu yazışma engellenmiş.']);
   final String message;
 
   @override
   String toString() => message;
+}
+
+class IncomingNudge {
+  const IncomingNudge({
+    required this.id,
+    required this.from,
+    required this.chatId,
+    this.createdAt,
+  });
+
+  final String id;
+  final String from;
+  final String chatId;
+  final DateTime? createdAt;
 }
 
 class GroupEmailParseResult {
@@ -102,6 +118,32 @@ class ChatService {
         .toList();
   }
 
+  static List<String> adminsAfterMemberLeave({
+    required Iterable<String> adminIds,
+    required Iterable<String> remainingParticipants,
+    required String leavingId,
+  }) {
+    final remaining = remainingParticipants
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty && id != leavingId)
+        .toList();
+    final next = adminIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty && id != leavingId)
+        .toList();
+    if (next.isNotEmpty) return next;
+    if (remaining.isEmpty) return const [];
+    return [remaining.first];
+  }
+
+  static bool sameIds(List<String> left, List<String> right) {
+    if (left.length != right.length) return false;
+    for (var i = 0; i < left.length; i++) {
+      if (left[i] != right[i]) return false;
+    }
+    return true;
+  }
+
   CollectionReference<Map<String, dynamic>> get _chats =>
       _firestore.collection('chats');
 
@@ -110,6 +152,12 @@ class ChatService {
 
   CollectionReference<Map<String, dynamic>> _blocked(String userId) =>
       _firestore.collection('users').doc(userId).collection('blocked');
+
+  CollectionReference<Map<String, dynamic>> _nudgeAllow(String userId) =>
+      _firestore.collection('users').doc(userId).collection('nudgeAllow');
+
+  CollectionReference<Map<String, dynamic>> _incomingNudges(String userId) =>
+      _firestore.collection('users').doc(userId).collection('incomingNudges');
 
   Future<ChatRoom?> getChat(String chatId) async {
     final snap = await _chats.doc(chatId).get();
@@ -121,6 +169,13 @@ class ChatService {
     if (value == null) return null;
     if (value.length <= max) return value;
     return value.substring(0, max);
+  }
+
+  Future<List<ChatRoom>> chatsForUser(String userId) async {
+    final snapshot = await _chats
+        .where('participants', arrayContains: userId)
+        .get();
+    return snapshot.docs.map(ChatRoom.fromFirestore).toList();
   }
 
   Stream<List<ChatRoom>> watchUserChats(String userId) {
@@ -322,18 +377,16 @@ class ChatService {
       final updatedParticipants = participants
           .where((id) => id != target)
           .toList();
-      if (updatedParticipants.length < 2) {
-        throw StateError('Bir grupta en az 2 katılımcı kalmalıdır.');
-      }
-      final admins = (state['adminIds']! as List<String>)
-          .where((id) => id != target)
-          .toList();
-      if (admins.isEmpty) {
-        throw StateError('Grupta en az bir yönetici kalmalıdır.');
+      if (updatedParticipants.isEmpty) {
+        throw StateError('Gruptaki son kişi ayrılamaz.');
       }
       state
         ..['participants'] = updatedParticipants
-        ..['adminIds'] = admins;
+        ..['adminIds'] = adminsAfterMemberLeave(
+          adminIds: state['adminIds']! as List<String>,
+          remainingParticipants: updatedParticipants,
+          leavingId: target,
+        );
     });
   }
 
@@ -386,7 +439,7 @@ class ChatService {
         await appAdminRemoveFromGroup(chatId: doc.id, userId: userId);
         changed += 1;
       } on StateError {
-        // Groups cannot be reduced below two members or left admin-less.
+        // Last remaining member cannot be removed.
       }
     }
     return changed;
@@ -395,10 +448,10 @@ class ChatService {
   Future<void> _updateGroup(
     String chatId,
     void Function(Map<String, Object?> state) mutate,
-  ) {
+  ) async {
     final ref = _chats.doc(chatId);
-    return _firestore.runTransaction((transaction) async {
-      final snapshot = await transaction.get(ref);
+    try {
+      final snapshot = await ref.get();
       final data = snapshot.data();
       if (data == null || data['isGroup'] != true) {
         throw StateError('Grup bulunamadı.');
@@ -423,29 +476,34 @@ class ChatService {
 
       final updatedParticipants = state['participants']! as List<String>;
       final updatedAdmins = state['adminIds']! as List<String>;
+      final updatedName = (state['groupName'] as String? ?? '').trim();
       final unreadBefore = data['unreadCounts'] is Map
           ? Map<String, dynamic>.from(data['unreadCounts'] as Map)
           : <String, dynamic>{};
       final typingBefore = data['typing'] is Map
           ? Map<String, dynamic>.from(data['typing'] as Map)
           : <String, dynamic>{};
-      final updates = <String, dynamic>{
-        'participants': updatedParticipants,
-        'adminIds': updatedAdmins,
-        'groupName': state['groupName'],
-        'unreadCounts': {
+      final updates = <String, dynamic>{'adminIds': updatedAdmins};
+      if (!sameIds(updatedParticipants, participants)) {
+        updates['participants'] = updatedParticipants;
+        updates['unreadCounts'] = {
           for (final id in updatedParticipants) id: unreadBefore[id] ?? 0,
-        },
-        'typing': {
+        };
+        updates['typing'] = {
           for (final id in updatedParticipants)
             if (typingBefore.containsKey(id)) id: typingBefore[id],
-        },
-      };
-      if (!data.containsKey('createdAt')) {
-        updates['createdAt'] = FieldValue.serverTimestamp();
+        };
       }
-      transaction.update(ref, updates);
-    });
+      if (updatedName != (data['groupName'] as String? ?? '')) {
+        updates['groupName'] = updatedName;
+      }
+      await ref.update(updates);
+    } on FirebaseException catch (error) {
+      if (error.code == 'permission-denied') {
+        throw StateError('Bu grup işlemi şu an yapılamadı.');
+      }
+      throw StateError(error.message ?? 'Grup güncellenemedi.');
+    }
   }
 
   Future<void> promotePendingToChat({
@@ -544,7 +602,7 @@ class ChatService {
     final expiresAt = expireSeconds == null
         ? null
         : DateTime.now().add(Duration(seconds: expireSeconds));
-    final label = type == MessageType.video ? 'Video' : 'Fotograf';
+    final label = type == MessageType.video ? 'Video' : 'Fotoğraf';
     final message = ChatMessage(
       id: '',
       senderId: senderId,
@@ -566,32 +624,34 @@ class ChatService {
     required String chatId,
     required String query,
   }) async {
-    if (chatId.isEmpty || query.trim().isEmpty) return const [];
-    final words = SearchTokens.wordsOf(query);
-    if (words.isEmpty) return const [];
+    final q = query.trim();
+    if (chatId.isEmpty || q.isEmpty) return const [];
+    bool hit(ChatMessage item) =>
+        SearchTokens.matches(item.preview, q) ||
+        SearchTokens.matches(item.text, q);
     Query<Map<String, dynamic>> ref = _chats
         .doc(chatId)
         .collection('messages')
         .orderBy('createdAt');
-    try {
-      final indexed = await _chats
-          .doc(chatId)
-          .collection('messages')
-          .where('tokens', arrayContains: words.first)
-          .orderBy('createdAt')
-          .limit(80)
-          .get();
-      return indexed.docs
-          .map(ChatMessage.fromFirestore)
-          .where((item) => SearchTokens.matches(item.preview, query))
-          .toList();
-    } catch (_) {
-      final fallback = await ref.limit(250).get();
-      return fallback.docs
-          .map(ChatMessage.fromFirestore)
-          .where((item) => SearchTokens.matches(item.preview, query))
-          .toList();
+    final words = SearchTokens.wordsOf(q);
+    if (words.isNotEmpty) {
+      try {
+        final indexed = await _chats
+            .doc(chatId)
+            .collection('messages')
+            .where('tokens', arrayContains: words.first)
+            .orderBy('createdAt')
+            .limit(120)
+            .get();
+        final found = indexed.docs
+            .map(ChatMessage.fromFirestore)
+            .where(hit)
+            .toList();
+        if (found.isNotEmpty) return found;
+      } catch (_) {}
     }
+    final fallback = await ref.limit(400).get();
+    return fallback.docs.map(ChatMessage.fromFirestore).where(hit).toList();
   }
 
   Future<List<({ChatRoom chat, ChatMessage message})>> searchAllChats({
@@ -668,6 +728,7 @@ class ChatService {
         final ref = _chats.doc(chatId).collection('messages').doc(message.id);
         batch.update(ref, {
           'readBy': FieldValue.arrayUnion([readerId]),
+          'readAt.$readerId': FieldValue.serverTimestamp(),
         });
         writes += 1;
       }
@@ -724,6 +785,117 @@ class ChatService {
     return _prefs(
       userId,
     ).doc(chatId).set({'hidden': hidden}, SetOptions(merge: true));
+  }
+
+  Stream<Map<String, bool>> watchMyNudgeAllows(String userId) {
+    return _nudgeListen(
+      _nudgeAllow(userId).snapshots().map((snapshot) {
+        final result = <String, bool>{};
+        for (final doc in snapshot.docs) {
+          result[doc.id] = doc.data()['allow'] == true;
+        }
+        return result;
+      }),
+      const <String, bool>{},
+    );
+  }
+
+  Stream<bool> watchNudgeAllowed({
+    required String ownerId,
+    required String peerId,
+  }) {
+    if (ownerId.isEmpty || peerId.isEmpty) {
+      return Stream<bool>.value(false);
+    }
+    return _nudgeListen(
+      _nudgeAllow(ownerId).doc(peerId).snapshots().map((doc) {
+        return doc.data()?['allow'] == true;
+      }),
+      false,
+    );
+  }
+
+  Stream<List<IncomingNudge>> watchIncomingNudges(String userId) {
+    return _nudgeListen(
+      _incomingNudges(userId).snapshots().map((snapshot) {
+        return snapshot.docChanges
+            .where((change) => change.type == DocumentChangeType.added)
+            .map((change) {
+              final data = change.doc.data() ?? {};
+              return IncomingNudge(
+                id: change.doc.id,
+                from: data['from'] as String? ?? '',
+                chatId: data['chatId'] as String? ?? '',
+                createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+              );
+            })
+            .where((item) => item.from.isNotEmpty && item.chatId.isNotEmpty)
+            .toList();
+      }),
+      const <IncomingNudge>[],
+    );
+  }
+
+  Stream<T> _nudgeListen<T>(Stream<T> source, T fallback) {
+    late final StreamController<T> controller;
+    StreamSubscription<T>? sub;
+    controller = StreamController<T>(
+      onListen: () {
+        sub = source.listen(
+          controller.add,
+          onError: (Object _) {
+            if (!controller.isClosed) controller.add(fallback);
+            sub?.cancel();
+          },
+          cancelOnError: true,
+        );
+      },
+      onCancel: () => sub?.cancel(),
+    );
+    return controller.stream;
+  }
+
+  Future<void> setNudgeAllow({
+    required String userId,
+    required String peerId,
+    required String chatId,
+    required bool allow,
+  }) {
+    if (userId.isEmpty || peerId.isEmpty || chatId.isEmpty || userId == peerId) {
+      return Future<void>.value();
+    }
+    return _nudgeAllow(userId).doc(peerId).set({
+      'allow': allow,
+      'chatId': chatId,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> sendNudge({
+    required String fromId,
+    required String toId,
+    required String chatId,
+  }) async {
+    if (fromId.isEmpty || toId.isEmpty || chatId.isEmpty || fromId == toId) {
+      throw StateError('Dürtme gönderilemedi.');
+    }
+    try {
+      await _incomingNudges(toId).add({
+        'from': fromId,
+        'chatId': chatId,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      throw StateError('Bu kişi dürtülmek istemiyor.');
+    }
+  }
+
+  Future<void> consumeIncomingNudge({
+    required String userId,
+    required String nudgeId,
+  }) {
+    if (userId.isEmpty || nudgeId.isEmpty) return Future<void>.value();
+    return _incomingNudges(userId).doc(nudgeId).delete();
   }
 
   Future<void> clearChatForMe({
@@ -985,7 +1157,7 @@ class ChatService {
     final expiresAt = expireSeconds == null
         ? null
         : DateTime.now().add(Duration(seconds: expireSeconds));
-    final label = type == MessageType.video ? 'Video' : 'Fotograf';
+    final label = type == MessageType.video ? 'Video' : 'Fotoğraf';
     final message = ChatMessage(
       id: '',
       senderId: senderId,
@@ -1105,7 +1277,7 @@ class ChatService {
     }
 
     final userRef = _firestore.collection('users').doc(userId);
-    for (final name in ['chatPrefs', 'blocked', 'pendingSent']) {
+    for (final name in ['chatPrefs', 'blocked', 'pendingSent', 'nudgeAllow', 'incomingNudges']) {
       final docs = await userRef.collection(name).get();
       await _commitDeletes(docs.docs.map((doc) => doc.reference));
     }

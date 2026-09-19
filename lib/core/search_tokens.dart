@@ -22,9 +22,8 @@ class SearchTokens {
   }
 
   static bool matches(String haystack, String query) {
-    final needles = wordsOf(query);
-    if (needles.isEmpty) return false;
-    final lower = haystack.toLowerCase();
-    return needles.every(lower.contains);
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return false;
+    return haystack.toLowerCase().contains(q);
   }
 }

@@ -55,10 +55,19 @@ exports.validateEmailAddress = onCall(
   },
 );
 
-async function sendChatPush({ recipients, title, body, chatId }) {
+async function collectTokens(uids, chatId) {
   const db = getFirestore();
   const tokens = [];
-  for (const uid of recipients) {
+  for (const uid of uids) {
+    if (chatId) {
+      const pref = await db
+        .collection("users")
+        .doc(uid)
+        .collection("chatPrefs")
+        .doc(chatId)
+        .get();
+      if (pref.data()?.muted === true) continue;
+    }
     const snap = await db.collection("users").doc(uid).collection("fcmTokens").get();
     for (const doc of snap.docs) {
       const token = doc.data().token;
@@ -67,16 +76,55 @@ async function sendChatPush({ recipients, title, body, chatId }) {
       }
     }
   }
+  return tokens;
+}
+
+async function sendChatPush({ recipients, chatId }) {
+  const tokens = await collectTokens(recipients, chatId);
   if (tokens.length === 0) return;
   await getMessaging().sendEachForMulticast({
     tokens,
-    notification: { title, body },
+    notification: {
+      title: "HesapMakinesi",
+      body: "Son işlem kaydedildi",
+    },
     data: {
       chatId: String(chatId || ""),
-      sender: String(title || ""),
-      preview: String(body || ""),
+      type: "message",
     },
-    android: { priority: "high" },
+    android: {
+      priority: "high",
+      notification: {
+        channelId: "hm_alert",
+        defaultSound: true,
+        defaultVibrateTimings: true,
+        tag: `chat-${chatId || "x"}`,
+      },
+    },
+  });
+}
+
+async function sendNudgePush({ recipient, chatId, fromId }) {
+  const tokens = await collectTokens([recipient]);
+  if (tokens.length === 0) {
+    console.warn("nudge skipped: no tokens", recipient);
+    return;
+  }
+  const result = await getMessaging().sendEachForMulticast({
+    tokens,
+    data: {
+      type: "nudge",
+      chatId: String(chatId || ""),
+      from: String(fromId || ""),
+    },
+    android: {
+      priority: "high",
+    },
+  });
+  console.log("nudge push", {
+    tokens: tokens.length,
+    ok: result.successCount,
+    fail: result.failureCount,
   });
 }
 
@@ -96,16 +144,42 @@ exports.notifyOnChatMessage = onDocumentCreated(
     const participants = chatData.participants || [];
     const recipients = participants.filter((id) => id && id !== senderId);
     if (recipients.length === 0) return;
-    const sender = await db.collection("users").doc(senderId).get();
-    const senderData = sender.data() || {};
-    const title = chatData.isGroup === true && chatData.groupName
-      ? String(chatData.groupName)
-      : senderData.displayName || senderData.email || "Kayit";
-    const body = data.text || (data.type === "video" ? "Video" : data.type === "image" ? "Fotograf" : "Yeni mesaj");
     try {
-      await sendChatPush({ recipients, title, body, chatId });
+      await sendChatPush({ recipients, chatId });
     } catch (error) {
       console.error("Push send failed", error);
+    }
+  },
+);
+
+exports.notifyOnNudge = onDocumentCreated(
+  {
+    region: "europe-west1",
+    document: "users/{userId}/incomingNudges/{nudgeId}",
+  },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+    const toId = event.params.userId;
+    const fromId = data.from;
+    const chatId = data.chatId;
+    if (!toId || !fromId || !chatId) return;
+    const db = getFirestore();
+    const allow = await db
+      .collection("users")
+      .doc(toId)
+      .collection("nudgeAllow")
+      .doc(fromId)
+      .get();
+    if (allow.data()?.allow !== true) return;
+    try {
+      await sendNudgePush({
+        recipient: toId,
+        chatId,
+        fromId,
+      });
+    } catch (error) {
+      console.error("Nudge push send failed", error);
     }
   },
 );

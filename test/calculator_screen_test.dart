@@ -17,7 +17,7 @@ void _setLandscape(WidgetTester tester) {
 }
 
 void main() {
-  testWidgets('tuşlara basinca ekranda sayi gorunur', (tester) async {
+  testWidgets('tuşlara basinca ekranda sayı görünür', (tester) async {
     _setPortrait(tester);
     await tester.pumpWidget(
       MaterialApp(
@@ -67,7 +67,7 @@ void main() {
     expect(find.byIcon(Icons.backspace_outlined), findsOneWidget);
   });
 
-  testWidgets('yatayda bilimsel tuslar ve eksi isareti cikar', (tester) async {
+  testWidgets('yatayda bilimsel tuslar ve eksi isareti çıkar', (tester) async {
     _setLandscape(tester);
     await tester.pumpWidget(
       MaterialApp(

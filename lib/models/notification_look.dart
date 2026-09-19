@@ -9,8 +9,8 @@ class NotificationCopy {
     required String sender,
     required String preview,
   }) {
-    final name = sender.trim().isEmpty ? 'Kayit' : sender.trim();
-    final text = preview.trim().isEmpty ? 'Yeni kayit' : preview.trim();
+    final name = sender.trim().isEmpty ? 'Kayıt' : sender.trim();
+    final text = preview.trim().isEmpty ? 'Yeni kayıt' : preview.trim();
 
     switch (look) {
       case NotificationLook.off:
@@ -18,15 +18,15 @@ class NotificationCopy {
       case NotificationLook.cover:
         return const NotificationCopy(
           title: 'HesapMakinesi',
-          body: 'Son islem kaydedildi',
+          body: 'Son işlem kaydedildi',
         );
       case NotificationLook.record:
         return const NotificationCopy(
-          title: 'Kayitlar',
-          body: 'Yeni kayit',
+          title: 'Kayıtlar',
+          body: 'Yeni kayıt',
         );
       case NotificationLook.sender:
-        return NotificationCopy(title: name, body: 'Yeni kayit');
+        return NotificationCopy(title: name, body: 'Yeni kayıt');
       case NotificationLook.preview:
         return NotificationCopy(title: name, body: text);
     }
@@ -43,30 +43,30 @@ enum NotificationLook {
   String get label {
     switch (this) {
       case NotificationLook.off:
-        return 'Kapali';
+        return 'Kapalı';
       case NotificationLook.cover:
-        return 'Hesap makinesi kilifi';
+        return 'Gizli';
       case NotificationLook.record:
-        return 'Kayit';
+        return 'Kayıt';
       case NotificationLook.sender:
-        return 'Gonderen';
+        return 'Gönderen';
       case NotificationLook.preview:
-        return 'Gonderen ve metin';
+        return 'Gönderen ve metin';
     }
   }
 
   String get hint {
     switch (this) {
       case NotificationLook.off:
-        return 'Bildirim gosterilmez.';
+        return 'Bildirim yok.';
       case NotificationLook.cover:
-        return 'HesapMakinesi / Son islem kaydedildi';
+        return 'Hesap makinesi gibi görünür.';
       case NotificationLook.record:
-        return 'Kayitlar / Yeni kayit';
+        return 'Yalnızca kayıt.';
       case NotificationLook.sender:
-        return 'Kisinin adi / Yeni kayit';
+        return 'Gönderen adı.';
       case NotificationLook.preview:
-        return 'Kisinin adi / mesaj metni';
+        return 'Ad ve mesaj.';
     }
   }
 }

@@ -39,7 +39,7 @@ class AuthLogService {
         'createdAt': FieldValue.serverTimestamp(),
       });
     } catch (error) {
-      debugPrint('authEvents yazilamadi ($type): $error');
+      debugPrint('authEvents yazılamadı ($type): $error');
     }
   }
 

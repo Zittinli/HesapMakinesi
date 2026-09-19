@@ -23,13 +23,13 @@ class ModerationStatus {
   }
 
   String get label {
-    if (bannedPermanently) return 'Hesap kalici olarak kapatildi.';
+    if (bannedPermanently) return 'Hesap kalıcı olarak kapatıldı.';
     if (isRestricted()) {
       final until = timeoutUntil!;
       final stamp =
           '${until.day.toString().padLeft(2, '0')}.${until.month.toString().padLeft(2, '0')} '
           '${until.hour.toString().padLeft(2, '0')}:${until.minute.toString().padLeft(2, '0')}';
-      return 'Hesap $stamp tarihine kadar askida.';
+      return 'Hesap $stamp tarihine kadar askıda.';
     }
     return '';
   }
@@ -58,7 +58,7 @@ class ModerationStatus {
 }
 
 class AccountRestrictedException implements Exception {
-  const AccountRestrictedException([this.message = 'Hesabiniz askida.']);
+  const AccountRestrictedException([this.message = 'Hesabınız askıda.']);
   final String message;
 
   @override

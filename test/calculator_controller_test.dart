@@ -3,7 +3,7 @@ import 'package:hesap_makinesi/core/secret_config.dart';
 import 'package:hesap_makinesi/features/calculator/calculator_controller.dart';
 
 void main() {
-  test('3112 × 1231 islemi gizli arayuzu acar', () {
+  test('3112 × 1231 işlemi gizli arayuzu acar', () {
     expect(
       SecretConfig.shouldUnlockOperation(
         left: '3112',
@@ -49,7 +49,7 @@ void main() {
     );
   });
 
-  test('hesap gecmisi giris kodunu yazmaz', () {
+  test('hesap geçmişi giriş kodunu yazmaz', () {
     final controller = CalculatorController();
     controller.onButtonPressed('2');
     controller.onButtonPressed('+');
@@ -68,7 +68,7 @@ void main() {
     expect(controller.history.any((line) => line.contains('3112')), isFalse);
   });
 
-  test('degistirilen giris kodunu tanir', () {
+  test('değiştirilen giriş kodunu tanir', () {
     final controller = CalculatorController();
 
     for (final digit in '12'.split('')) {
@@ -90,7 +90,7 @@ void main() {
     expect(controller.display, '0');
   });
 
-  test('giris kodunun tersi de acar', () {
+  test('giriş kodunun tersi de acar', () {
     final controller = CalculatorController();
 
     for (final digit in '1231'.split('')) {
@@ -104,7 +104,7 @@ void main() {
     expect(controller.onEqualsPressed(), isTrue);
   });
 
-  test('hesap makinesi gizli islemi algilar', () {
+  test('hesap makinesi gizli işlemi algilar', () {
     final controller = CalculatorController();
 
     for (final digit in '3112'.split('')) {
@@ -119,7 +119,7 @@ void main() {
     expect(controller.display, '0');
   });
 
-  test('hesap makinesi temel islemleri yapar', () {
+  test('hesap makinesi temel işlemleri yapar', () {
     final controller = CalculatorController();
 
     controller.onButtonPressed('7');
@@ -148,7 +148,7 @@ void main() {
     expect(controller.display, '0');
   });
 
-  test('tek tek silme bekleyen islemi kaldirir', () {
+  test('tek tek silme bekleyen işlemi kaldırir', () {
     final controller = CalculatorController();
 
     controller.onButtonPressed('7');
@@ -159,7 +159,7 @@ void main() {
     expect(controller.expressionDisplay, '7');
   });
 
-  test('yatay bilimsel fonksiyonlar calisir', () {
+  test('yatay bilimsel fonksiyonlar çalışır', () {
     final controller = CalculatorController();
 
     controller.onButtonPressed('9');

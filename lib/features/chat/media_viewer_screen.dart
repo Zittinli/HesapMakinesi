@@ -26,6 +26,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
   String? _error;
   bool _showControls = true;
   bool _isFullscreen = false;
+  double _lastVolume = 1;
 
   @override
   void initState() {
@@ -46,7 +47,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
             setState(() {});
           })
           .catchError((_) {
-            if (mounted) setState(() => _error = 'Video acilamadi.');
+            if (mounted) setState(() => _error = 'Video açılamadı.');
           });
     }
   }
@@ -122,7 +123,28 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
   Future<void> _toggleMute() async {
     final video = _video;
     if (video == null) return;
-    await video.setVolume(video.value.volume == 0 ? 1 : 0);
+    if (video.value.volume == 0) {
+      await video.setVolume(_lastVolume <= 0 ? 1 : _lastVolume);
+    } else {
+      _lastVolume = video.value.volume;
+      await video.setVolume(0);
+    }
+    _scheduleControlsHide();
+  }
+
+  Future<void> _setVolume(double value) async {
+    final video = _video;
+    if (video == null) return;
+    _lastVolume = value <= 0 ? _lastVolume : value;
+    await video.setVolume(value);
+    _scheduleControlsHide();
+  }
+
+  Future<void> _restartVideo() async {
+    final video = _video;
+    if (video == null) return;
+    await video.seekTo(Duration.zero);
+    await video.play();
     _scheduleControlsHide();
   }
 
@@ -160,7 +182,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white70,
-        title: const Text('Fotograf'),
+        title: const Text('Fotoğraf'),
       ),
       body: Center(child: _buildImage()),
     );
@@ -176,7 +198,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
         placeholder: (_, __) =>
             const CircularProgressIndicator(color: Colors.white24),
         errorWidget: (_, __, ___) => const Text(
-          'Fotograf acilamadi.',
+          'Fotoğraf açılamadı.',
           style: TextStyle(color: Colors.white54),
         ),
       ),
@@ -212,23 +234,47 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
     final durationMs = video.value.duration.inMilliseconds;
     final positionMs = video.value.position.inMilliseconds.clamp(0, durationMs);
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _toggleControls,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Center(
-            child: AspectRatio(
-              aspectRatio: video.value.aspectRatio == 0
-                  ? 9 / 16
-                  : video.value.aspectRatio,
-              child: VideoPlayer(video),
-            ),
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Center(
+          child: AspectRatio(
+            aspectRatio: video.value.aspectRatio == 0
+                ? 9 / 16
+                : video.value.aspectRatio,
+            child: VideoPlayer(video),
           ),
-          if (video.value.isBuffering)
-            const CircularProgressIndicator(color: Colors.white70),
-          IgnorePointer(
+        ),
+        if (video.value.isBuffering)
+          const CircularProgressIndicator(color: Colors.white70),
+        Positioned.fill(
+          child: Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _toggleControls,
+                  onDoubleTap: () => _seekBy(const Duration(seconds: -10)),
+                ),
+              ),
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _toggleControls,
+                  onDoubleTap: _togglePlay,
+                ),
+              ),
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _toggleControls,
+                  onDoubleTap: () => _seekBy(const Duration(seconds: 10)),
+                ),
+              ),
+            ],
+          ),
+        ),
+        IgnorePointer(
             ignoring: !_showControls,
             child: AnimatedOpacity(
               opacity: _showControls ? 1 : 0,
@@ -265,6 +311,16 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
+                          tooltip: 'Başa sar',
+                          iconSize: 32,
+                          onPressed: _restartVideo,
+                          icon: const Icon(
+                            Icons.restart_alt,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
                           tooltip: '10 saniye geri',
                           iconSize: 36,
                           onPressed: () =>
@@ -274,7 +330,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
                             color: Colors.white,
                           ),
                         ),
-                        const SizedBox(width: 20),
+                        const SizedBox(width: 12),
                         IconButton(
                           tooltip: video.value.isPlaying ? 'Duraklat' : 'Oynat',
                           iconSize: 62,
@@ -286,13 +342,24 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
                             color: Colors.white,
                           ),
                         ),
-                        const SizedBox(width: 20),
+                        const SizedBox(width: 12),
                         IconButton(
                           tooltip: '10 saniye ileri',
                           iconSize: 36,
                           onPressed: () => _seekBy(const Duration(seconds: 10)),
                           icon: const Icon(
                             Icons.forward_10,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: '5 saniye ileri',
+                          iconSize: 32,
+                          onPressed: () =>
+                              _seekBy(const Duration(seconds: 5)),
+                          icon: const Icon(
+                            Icons.forward_5,
                             color: Colors.white,
                           ),
                         ),
@@ -344,7 +411,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
                                 const Spacer(),
                                 IconButton(
                                   tooltip: video.value.volume == 0
-                                      ? 'Sesi ac'
+                                      ? 'Sesi aç'
                                       : 'Sessize al',
                                   onPressed: _toggleMute,
                                   icon: Icon(
@@ -354,8 +421,30 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
                                     color: Colors.white,
                                   ),
                                 ),
+                                SizedBox(
+                                  width: 92,
+                                  child: SliderTheme(
+                                    data: SliderTheme.of(context).copyWith(
+                                      activeTrackColor: Colors.white,
+                                      inactiveTrackColor: Colors.white30,
+                                      thumbColor: Colors.white,
+                                      overlayColor: Colors.white12,
+                                      trackHeight: 2,
+                                    ),
+                                    child: Slider(
+                                      min: 0,
+                                      max: 1,
+                                      value: video.value.volume.clamp(0, 1),
+                                      onChanged: _setVolume,
+                                      onChangeStart: (_) =>
+                                          _controlsTimer?.cancel(),
+                                      onChangeEnd: (_) =>
+                                          _scheduleControlsHide(),
+                                    ),
+                                  ),
+                                ),
                                 PopupMenuButton<double>(
-                                  tooltip: 'Oynatma hizi',
+                                  tooltip: 'Oynatma hızı',
                                   color: const Color(0xFF202020),
                                   initialValue: video.value.playbackSpeed,
                                   onSelected: (speed) {
@@ -395,7 +484,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
                                 ),
                                 IconButton(
                                   tooltip: _isFullscreen
-                                      ? 'Tam ekrandan cik'
+                                      ? 'Tam ekrandan çık'
                                       : 'Tam ekran',
                                   onPressed: _toggleFullscreen,
                                   icon: Icon(
@@ -417,7 +506,6 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
             ),
           ),
         ],
-      ),
     );
   }
 }

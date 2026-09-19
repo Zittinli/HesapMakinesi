@@ -33,26 +33,26 @@ void main() {
       );
     });
 
-    test('son gorulme ve son aktif etiketi', () {
+    test('son görülme ve son aktif etiketi', () {
       final now = DateTime(2026, 8, 30, 20, 0);
       expect(ChatFormat.lastSeenLabel(now, now: now, isOnline: true), 'Aktif');
       expect(
         ChatFormat.lastSeenLabel(DateTime(2026, 8, 30, 19, 59), now: now),
-        'Son aktif: az once',
+        'Son aktif: az önce',
       );
       expect(
         ChatFormat.lastSeenLabel(DateTime(2026, 8, 30, 14, 5), now: now),
-        'Son gorulme: 14:05',
+        'Son görülme: 14:05',
       );
       expect(
         ChatFormat.lastSeenLabel(DateTime(2026, 8, 29, 14, 5), now: now),
-        'Son gorulme: Dün 14:05',
+        'Son görülme: Dün 14:05',
       );
     });
   });
 
   group('ChatMessage', () {
-    test('suresi dolan mesaji gizler', () {
+    test('suresi dolan mesajı gizler', () {
       final message = ChatMessage(
         id: '1',
         senderId: 'a',
@@ -67,7 +67,7 @@ void main() {
       expect(message.isVisibleTo('b'), isFalse);
     });
 
-    test('temizlenen sohbet eski mesaji gizler', () {
+    test('temizlenen sohbet eski mesajı gizler', () {
       final created = DateTime.now().subtract(const Duration(minutes: 5));
       final message = ChatMessage(
         id: '2',
@@ -91,7 +91,7 @@ void main() {
       final message = ChatMessage(
         id: 'ttl-off',
         senderId: 'a',
-        text: 'kalici',
+        text: 'kalıcı',
         createdAt: DateTime.now(),
         readBy: const ['a'],
       );
@@ -101,7 +101,7 @@ void main() {
       expect(message.toFirestore().containsKey('expireSeconds'), isFalse);
     });
 
-    test('benden silinen mesaj sadece o kullaniciya gizlenir', () {
+    test('benden silinen mesaj sadece o kullanıcıya gizlenir', () {
       final message = ChatMessage(
         id: '3',
         senderId: 'a',
@@ -117,7 +117,7 @@ void main() {
   });
 
   group('ChatRoom', () {
-    test('okunmamis sayisi ve engel', () {
+    test('okunmamis sayısi ve engel', () {
       const chat = ChatRoom(
         id: 'u1_u2',
         participants: ['u1', 'u2'],
@@ -134,7 +134,7 @@ void main() {
       expect(chat.isBlocked(), isTrue);
     });
 
-    test('yaziyor penceresi 8 saniyeden sonra kapanir', () {
+    test('yazıyor penceresi 8 saniyeden sonra kapanır', () {
       final chat = ChatRoom(
         id: 'u1_u2',
         participants: const ['u1', 'u2'],
@@ -233,17 +233,39 @@ void main() {
 
       expect(recipients.toSet(), {'u2', 'u3'});
     });
+
+    test('son yönetici ayrılınca kalan ilk üyeyi yönetici yapar', () {
+      expect(
+        ChatService.adminsAfterMemberLeave(
+          adminIds: ['u1'],
+          remainingParticipants: ['u2', 'u3'],
+          leavingId: 'u1',
+        ),
+        ['u2'],
+      );
+    });
+
+    test('yönetici olmayan ayrılınca diğer yöneticiler kalır', () {
+      expect(
+        ChatService.adminsAfterMemberLeave(
+          adminIds: ['u1', 'u2'],
+          remainingParticipants: ['u1', 'u2'],
+          leavingId: 'u3',
+        ),
+        ['u1', 'u2'],
+      );
+    });
   });
 
   group('Moderation', () {
-    test('yonetici e-postasini tanir', () {
+    test('yönetici e-postasini tanir', () {
       expect(AdminConfig.isAdminEmail('zttnlnkc@gmail.com'), isTrue);
       expect(AdminConfig.isAdminEmail('ZTTNLNKC@GMAIL.COM'), isTrue);
       expect(AdminConfig.isAdminEmail('zittuni1912@gmail.com'), isFalse);
       expect(AdminConfig.isAdminEmail('baskasi@gmail.com'), isFalse);
     });
 
-    test('kalici ban ve timeout kisitlar', () {
+    test('kalıcı ban ve timeout kişitlar', () {
       expect(
         const ModerationStatus(bannedPermanently: true).isRestricted(),
         isTrue,
@@ -262,7 +284,7 @@ void main() {
       );
     });
 
-    test('kalici ban timeouta ustun gelir', () {
+    test('kalıcı ban timeouta ustun gelir', () {
       final banned = const ModerationStatus(bannedPermanently: true);
       final timeout = ModerationStatus(
         timeoutUntil: DateTime.now().add(const Duration(days: 1)),
@@ -297,8 +319,8 @@ void main() {
     });
   });
 
-  group('email OTP kayit kapisi', () {
-    test('eski kullanici kod ekranina dusmez', () {
+  group('email OTP kayıt kapisi', () {
+    test('eski kullanıcı kod ekranına dusmez', () {
       final user = AppUser(
         id: 'u1',
         email: 'eski@example.com',
@@ -310,7 +332,7 @@ void main() {
       expect(user.needsEmailOtp, isFalse);
     });
 
-    test('yeni kullanici kod dogrulamadan gecemez', () {
+    test('yeni kullanıcı kod doğrulamadan gecemez', () {
       final user = AppUser(
         id: 'u2',
         email: 'yeni@example.com',
@@ -338,7 +360,7 @@ void main() {
     });
   });
 
-  test('bildirimler sikayet edilen kullaniciya gore gruplanir', () {
+  test('bildirimler sikayet edilen kullanıcıya gore gruplanir', () {
     MessageReport report({
       required String id,
       required String email,

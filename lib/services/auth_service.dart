@@ -92,7 +92,7 @@ class AuthService extends ChangeNotifier {
     if (!acceptedTerms) {
       throw FirebaseAuthException(
         code: 'terms-required',
-        message: 'Aydinlatma metnini onaylaman gerekir.',
+        message: 'Aydınlatma metnini onaylaman gerekir.',
       );
     }
 
@@ -106,7 +106,7 @@ class AuthService extends ChangeNotifier {
     if (user == null) {
       throw FirebaseAuthException(
         code: 'user-null',
-        message: 'Kullanici olusturulamadi.',
+        message: 'Kullanıcı oluşturulamadı.',
       );
     }
 
@@ -129,7 +129,7 @@ class AuthService extends ChangeNotifier {
     try {
       await user.sendEmailVerification();
     } catch (error) {
-      debugPrint('Dogrulama e-postasi gonderilemedi: $error');
+      debugPrint('Doğrulama e-postasi gönderilemedi: $error');
     }
     notifyListeners();
   }
@@ -171,7 +171,7 @@ class AuthService extends ChangeNotifier {
     if (user == null || email == null || email.isEmpty) {
       throw FirebaseAuthException(
         code: 'no-user',
-        message: 'Oturum bulunamadi.',
+        message: 'Oturum bulunamadı.',
       );
     }
 
@@ -212,7 +212,7 @@ class AuthService extends ChangeNotifier {
         AppUser(
           id: user.uid,
           email: user.email ?? '',
-          displayName: user.email?.split('@').first ?? 'Kullanici',
+          displayName: user.email?.split('@').first ?? 'Kullanıcı',
           isOnline: true,
           lastSeen: DateTime.now(),
           createdAt: DateTime.now(),
@@ -261,14 +261,14 @@ class AuthService extends ChangeNotifier {
     if (user == null) {
       throw FirebaseAuthException(
         code: 'no-user',
-        message: 'Oturum bulunamadi.',
+        message: 'Oturum bulunamadı.',
       );
     }
     final trimmed = name.trim();
     if (trimmed.isEmpty || trimmed.length > 80) {
       throw FirebaseAuthException(
         code: 'invalid-name',
-        message: 'Gorunen ad 1-80 karakter olmali.',
+        message: 'Görünen ad 1-80 karakter olmalı.',
       );
     }
     final doc = _firestore.collection('users').doc(user.uid);
@@ -276,7 +276,7 @@ class AuthService extends ChangeNotifier {
     if (!snapshot.exists) {
       throw FirebaseAuthException(
         code: 'no-profile',
-        message: 'Profil bulunamadi.',
+        message: 'Profil bulunamadı.',
       );
     }
     final profile = AppUser.fromFirestore(snapshot);
@@ -285,7 +285,7 @@ class AuthService extends ChangeNotifier {
       final minutes = cooldown.inMinutes + 1;
       throw FirebaseAuthException(
         code: 'name-cooldown',
-        message: 'Gorunen ad $minutes dakika sonra degistirilebilir.',
+        message: 'Görünen ad $minutes dakika sonra değiştirilebilir.',
       );
     }
     await doc.update({
@@ -293,6 +293,13 @@ class AuthService extends ChangeNotifier {
       'displayNameChangedAt': FieldValue.serverTimestamp(),
     });
     notifyListeners();
+  }
+
+  Future<AppUser?> fetchUser(String userId) async {
+    if (userId.isEmpty) return null;
+    final doc = await _firestore.collection('users').doc(userId).get();
+    if (!doc.exists) return null;
+    return AppUser.fromFirestore(doc);
   }
 
   Stream<List<AppUser>> watchAllUsers() {

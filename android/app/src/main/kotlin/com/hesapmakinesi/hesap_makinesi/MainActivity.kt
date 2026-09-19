@@ -13,6 +13,9 @@ open class MainActivity : FlutterActivity() {
     private val channelName = "com.hesapmakinesi.hesap_makinesi/launcher_icon"
     private val screenSecurityChannelName =
         "com.hesapmakinesi.hesap_makinesi/screen_security"
+    private val videoConcatChannelName =
+        "com.hesapmakinesi.hesap_makinesi/video_concat"
+    private val nudgeChannelName = "com.hesapmakinesi.hesap_makinesi/nudge"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -29,6 +32,15 @@ open class MainActivity : FlutterActivity() {
             val enabled = if (samsung) "SamsungLauncherAlias" else "ClassicLauncherAlias"
             val disabled = if (samsung) "ClassicLauncherAlias" else "SamsungLauncherAlias"
             try {
+                val samsungOn = isLauncherEnabled("SamsungLauncherAlias", true)
+                val classicOn = isLauncherEnabled("ClassicLauncherAlias", false)
+                if ((samsung && samsungOn && !classicOn) ||
+                    (!samsung && classicOn && !samsungOn)
+                ) {
+                    result.success(enabled)
+                    return@setMethodCallHandler
+                }
+
                 val enabledComponent = ComponentName(this, "$packageName.$enabled")
                 val disabledComponent = ComponentName(this, "$packageName.$disabled")
 
@@ -85,9 +97,63 @@ open class MainActivity : FlutterActivity() {
             }
             result.success(enabled)
         }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            nudgeChannelName,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "play" -> {
+                    NudgeVibration.play(this)
+                    result.success(null)
+                }
+                "batteryUnrestricted" -> {
+                    result.success(NudgeVibration.isBatteryUnrestricted(this))
+                }
+                "requestBatteryUnrestricted" -> {
+                    NudgeVibration.requestBatteryUnrestricted(this)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            videoConcatChannelName,
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "concat") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            val inputs = call.argument<List<String>>("inputs").orEmpty()
+            val output = call.argument<String>("output").orEmpty()
+            if (inputs.size < 2 || output.isEmpty()) {
+                result.error("BAD_ARGS", "Birleştirilecek video parçası yok.", null)
+                return@setMethodCallHandler
+            }
+            try {
+                VideoConcat.concat(inputs, output)
+                result.success(output)
+            } catch (error: Exception) {
+                Log.e("VideoConcat", "Could not concat videos", error)
+                result.error("CONCAT_FAILED", error.message, null)
+            }
+        }
+    }
+
+    private fun isLauncherEnabled(name: String, enabledByDefault: Boolean): Boolean {
+        val state = packageManager.getComponentEnabledSetting(
+            ComponentName(this, "$packageName.$name"),
+        )
+        return when (state) {
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED -> false
+            else -> enabledByDefault
+        }
     }
 }
 
-class ClassicLauncherAlias : MainActivity()
-
 class SamsungLauncherAlias : MainActivity()
+
+class ClassicLauncherAlias : MainActivity()

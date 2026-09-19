@@ -11,6 +11,7 @@ class ChatMessage {
     required this.text,
     required this.createdAt,
     required this.readBy,
+    this.readAt = const {},
     this.type = MessageType.text,
     this.mediaUrl,
     this.replyToId,
@@ -30,6 +31,7 @@ class ChatMessage {
   final String? mediaUrl;
   final DateTime? createdAt;
   final List<String> readBy;
+  final Map<String, DateTime> readAt;
   final String? replyToId;
   final String? replyToText;
   final String? replyToSenderId;
@@ -69,9 +71,20 @@ class ChatMessage {
   }
 
   String get preview {
-    if (type == MessageType.image) return text.isEmpty ? 'Fotograf' : text;
+    if (type == MessageType.image) return text.isEmpty ? 'Fotoğraf' : text;
     if (type == MessageType.video) return text.isEmpty ? 'Video' : text;
     return text;
+  }
+
+  static Map<String, DateTime> _readAtOf(Object? raw) {
+    if (raw is! Map) return const {};
+    final result = <String, DateTime>{};
+    raw.forEach((key, value) {
+      if (value is Timestamp) {
+        result[key.toString()] = value.toDate();
+      }
+    });
+    return result;
   }
 
   factory ChatMessage.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
@@ -89,6 +102,7 @@ class ChatMessage {
       mediaUrl: data['mediaUrl'] as String?,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
       readBy: List<String>.from(data['readBy'] as List? ?? []),
+      readAt: _readAtOf(data['readAt']),
       replyToId: data['replyToId'] as String?,
       replyToText: data['replyToText'] as String?,
       replyToSenderId: data['replyToSenderId'] as String?,
@@ -114,6 +128,11 @@ class ChatMessage {
           ? Timestamp.fromDate(createdAt!)
           : FieldValue.serverTimestamp(),
       'readBy': readBy,
+      if (readAt.isNotEmpty)
+        'readAt': {
+          for (final entry in readAt.entries)
+            entry.key: Timestamp.fromDate(entry.value),
+        },
       'deletedFor': deletedFor,
       'deletedForEveryone': deletedForEveryone,
       'tokens': SearchTokens.fromText('$text $preview'),

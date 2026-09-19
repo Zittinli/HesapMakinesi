@@ -22,21 +22,21 @@ class AuthEvent {
   String get label {
     switch (type) {
       case 'sign_in':
-        return 'Giris basarili';
+        return 'Giriş başarılı';
       case 'sign_in_failed':
-        return 'Giris basarisiz';
+        return 'Giriş başarısız';
       case 'sign_up':
-        return 'Yeni kayit';
+        return 'Yeni kayıt';
       case 'password_reset':
-        return 'Sifre sifirlama';
+        return 'Şifre sıfırlama';
       case 'otp_sent':
-        return 'Onay kodu gonderildi';
+        return 'Onay kodu gönderildi';
       case 'otp_failed':
-        return 'Onay kodu hatali';
+        return 'Onay kodu hatalı';
       case 'otp_verified':
-        return 'Onay kodu dogrulandi';
+        return 'Onay kodu doğrulandı';
       case 'sign_out':
-        return 'Cikis';
+        return 'Çıkış';
       default:
         return type;
     }

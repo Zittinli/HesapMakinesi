@@ -23,7 +23,7 @@ class RestrictedScreen extends StatelessWidget {
         backgroundColor: const Color(0xFF0B0B0B),
         foregroundColor: Colors.white70,
         elevation: 0,
-        title: const Text('Hesap kisitli'),
+        title: const Text('Hesap kısıtlı'),
         leading: onExitToCalculator == null
             ? null
             : IconButton(
@@ -60,12 +60,12 @@ class RestrictedScreen extends StatelessWidget {
                 foregroundColor: Colors.white70,
                 side: const BorderSide(color: Colors.white24),
               ),
-              child: const Text('Hesabi sil'),
+              child: const Text('Hesabı sil'),
             ),
             const SizedBox(height: 8),
             TextButton(
               onPressed: () => context.read<AuthService>().signOut(),
-              child: const Text('Cikis yap', style: TextStyle(color: Colors.white38)),
+              child: const Text('Çıkış yap', style: TextStyle(color: Colors.white38)),
             ),
           ],
         ),

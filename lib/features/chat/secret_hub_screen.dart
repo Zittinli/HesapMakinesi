@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/admin_config.dart';
 import '../../core/chat_format.dart';
+import '../../core/chat_idle_listener.dart';
 import '../../models/chat_model.dart';
 import '../../models/chat_pref_model.dart';
 import '../../models/message_model.dart';
@@ -10,6 +13,7 @@ import '../../models/pending_thread_model.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/nudge_service.dart';
 import '../../services/settings_service.dart';
 import '../chat/chat_screen.dart';
 import '../chat/pending_chats_screen.dart';
@@ -120,7 +124,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
       );
     } catch (error) {
       if (mounted) {
-        setState(() => _error = 'Sohbet acilamadi. Tekrar deneyin.');
+        setState(() => _error = 'Sohbet açılamadı. Tekrar deneyin.');
       }
     } finally {
       if (mounted) setState(() => _isStarting = false);
@@ -136,6 +140,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
     bool isGroup = false,
     String? groupName,
   }) {
+    unawaited(context.read<NudgeService>().clearChat(chatId));
     return Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ChatScreen(
@@ -164,7 +169,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
           autofocus: true,
           keyboardType: TextInputType.emailAddress,
           style: const TextStyle(color: Colors.white),
-          decoration: _fieldDecoration('ornek@mail.com'),
+          decoration: _fieldDecoration('örnek@mail.com'),
           onSubmitted: (value) => Navigator.pop(dialogContext, value),
         ),
         actions: [
@@ -313,6 +318,8 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
       _showError(
         error is ArgumentError
             ? error.message.toString()
+            : error.toString().contains('permission-denied')
+            ? 'Grup oluşturulamadı: izin reddedildi.'
             : 'Grup oluşturulamadı. Tekrar deneyin.',
       );
     } finally {
@@ -397,7 +404,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
     await _openChat(
       chatId: chat.id,
       otherUserId: otherId,
-      otherUserName: other?.visibleName ?? 'Kayit',
+      otherUserName: other?.visibleName ?? 'Kayıt',
       pendingEmail: other?.email,
     );
   }
@@ -419,14 +426,14 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
               const Padding(
                 padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Text(
-                  'Gizlenen kayitlar',
+                  'Gizlenen kayıtlar',
                   style: TextStyle(color: Colors.white70, fontSize: 16),
                 ),
               ),
               const Padding(
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                 child: Text(
-                  'Dokununca tekrar listede gorunur.',
+                  'Dokununca tekrar listede görünür.',
                   style: TextStyle(color: Colors.white38, fontSize: 12),
                 ),
               ),
@@ -454,7 +461,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                   ),
                   subtitle: Text(
                     chat.lastMessage.isEmpty
-                        ? 'Kayit gizlendi'
+                        ? 'Kayıt gizlendi'
                         : chat.lastMessage,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -491,6 +498,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
         chat.lastMessage,
         other?.email ?? '',
         other?.displayName ?? '',
+        other?.visibleName ?? '',
       ].join(' ').toLowerCase();
       return haystack.contains(query);
     }).toList();
@@ -531,7 +539,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                   color: Colors.white70,
                 ),
                 title: Text(
-                  pref.pinned ? 'Sabiti kaldir' : 'Sabitle',
+                  pref.pinned ? 'Sabiti kaldır' : 'Sabitle',
                   style: const TextStyle(color: Colors.white70),
                 ),
                 onTap: () {
@@ -551,7 +559,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                   color: Colors.white70,
                 ),
                 title: Text(
-                  pref.muted ? 'Sesi ac' : 'Sessize al',
+                  pref.muted ? 'Sesi aç' : 'Sessize al',
                   style: const TextStyle(color: Colors.white70),
                 ),
                 onTap: () {
@@ -592,7 +600,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                 ),
                 onTap: () async {
                   Navigator.pop(context);
-                  final ok = await _confirm('Bu kayit listeden silinsin mi?');
+                  final ok = await _confirm('Bu kayıt listeden silinsin mi?');
                   if (ok == true) {
                     await chatService.deleteChatForMe(
                       userId: currentUserId,
@@ -617,7 +625,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Vazgec'),
+            child: const Text('Vazgeç'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
@@ -635,12 +643,14 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
     final currentUserId = authService.currentUser!.uid;
     final myEmail = authService.currentUser?.email ?? '';
 
-    return Scaffold(
+    return ChatIdleListener(
+      onIdle: widget.onExitToCalculator,
+      child: Scaffold(
       backgroundColor: const Color(0xFF0B0B0B),
       floatingActionButton: FloatingActionButton(
         tooltip: 'Yeni sohbet',
-        backgroundColor: const Color(0xFFEEEEEE),
-        foregroundColor: const Color(0xFF111111),
+        backgroundColor: const Color(0xFF3A3A3A),
+        foregroundColor: const Color(0xFFD0D0D0),
         onPressed: _isStarting ? null : _showCreateMenu,
         child: _isStarting
             ? const SizedBox(
@@ -655,18 +665,18 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
         foregroundColor: Colors.white70,
         elevation: 0,
         title: const Text(
-          'Kayitlar',
+          'Kayıtlar',
           style: TextStyle(fontWeight: FontWeight.w400, letterSpacing: 0.5),
         ),
         leading: IconButton(
-          tooltip: 'Hesap makinesine don',
+          tooltip: 'Hesap makinesine dön',
           icon: const Icon(Icons.close),
           onPressed: widget.onExitToCalculator,
         ),
         actions: [
           if (AdminConfig.isAdminEmail(myEmail))
             IconButton(
-              tooltip: 'Yonetim',
+              tooltip: 'Yönetim',
               icon: const Icon(Icons.shield_outlined, size: 22),
               color: const Color(0xFFFFCC80),
               onPressed: () {
@@ -683,7 +693,13 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
             onPressed: () {
               Navigator.of(
                 context,
-              ).push(MaterialPageRoute(builder: (_) => const SettingsScreen()));
+              ).push(
+                MaterialPageRoute(
+                  builder: (_) => SettingsScreen(
+                    onExitToCalculator: widget.onExitToCalculator,
+                  ),
+                ),
+              );
             },
             icon: const Icon(
               Icons.settings_outlined,
@@ -696,12 +712,12 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
             ),
           ),
           IconButton(
-            tooltip: 'Hesap makinesine don',
+            tooltip: 'Hesap makinesine dön',
             icon: const Icon(Icons.calculate_outlined, size: 22),
             onPressed: widget.onExitToCalculator,
           ),
           IconButton(
-            tooltip: 'Cikis',
+            tooltip: 'Çıkış',
             icon: const Icon(Icons.logout, size: 20),
             onPressed: () => authService.signOut(),
           ),
@@ -894,6 +910,7 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 
@@ -1002,8 +1019,8 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
           return Center(
             child: Text(
               widget.searchQuery.trim().isEmpty
-                  ? 'Gosterilecek kayit yok.'
-                  : 'Eslesen kayit yok.',
+                  ? 'Gosterilecek kayıt yok.'
+                  : 'Eslesen kayıt yok.',
               style: const TextStyle(color: Colors.white38),
             ),
           );
@@ -1022,6 +1039,7 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                 : (otherUser?.visibleName ?? 'Kullanıcı');
             final pref = widget.prefs[chat.id] ?? ChatPref.empty(chat.id);
             final unread = chat.unreadFor(widget.currentUserId);
+            final nudged = context.watch<NudgeService>().hasPending(chat.id);
 
             return Dismissible(
               key: ValueKey(chat.id),
@@ -1120,9 +1138,9 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                                     chat.isOtherTyping(otherUserId);
                                 return Text(
                                   nowTyping
-                                      ? 'Yaziyor...'
+                                      ? 'Yazıyor...'
                                       : (chat.lastMessage.isEmpty
-                                            ? 'Kayit olusturuldu'
+                                            ? 'Sohbet'
                                             : chat.lastMessage),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -1145,6 +1163,14 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
+                          if (nudged) ...[
+                            const Icon(
+                              Icons.vibration,
+                              size: 16,
+                              color: Colors.white70,
+                            ),
+                            const SizedBox(height: 4),
+                          ],
                           Text(
                             ChatFormat.listTime(chat.lastMessageAt),
                             style: const TextStyle(
@@ -1209,7 +1235,39 @@ class _GlobalMessageHits extends StatelessWidget {
       ),
       builder: (context, snapshot) {
         final hits = snapshot.data ?? const [];
-        if (hits.isEmpty) return const SizedBox.shrink();
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white24,
+                ),
+              ),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
+              'Arama yapılamadı. Tekrar deneyin.',
+              style: TextStyle(color: Colors.white38),
+            ),
+          );
+        }
+        if (hits.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Text(
+              'Mesajlarda sonuç yok.',
+              style: TextStyle(color: Colors.white38),
+            ),
+          );
+        }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

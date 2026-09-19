@@ -17,6 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _obscurePassword = true;
   String? _error;
 
   @override
@@ -42,7 +43,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } on FirebaseAuthException catch (error) {
       setState(() => _error = _loginError(error.code));
     } catch (error) {
-      setState(() => _error = 'Giris basarisiz. Bilgilerinizi kontrol edin.');
+      setState(() => _error = 'Giriş başarısız. Bilgilerinizi kontrol edin.');
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -53,7 +54,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _resetPassword() async {
     final email = _emailController.text.trim();
     if (email.isEmpty || !email.contains('@')) {
-      setState(() => _error = 'Sifre sifirlama icin e-posta yaz.');
+      setState(() => _error = 'Şifre sıfırlama için e-posta yaz.');
       return;
     }
     setState(() {
@@ -66,13 +67,13 @@ class _LoginScreenState extends State<LoginScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Sifre sifirlama baglantisi e-postana gonderildi. Gelen kutusu ve spam klasorunu kontrol et.',
+            'Şifre sıfırlama bağlantısı e-postana gönderildi. Gelen kutusu ve spam klasörünü kontrol et.',
           ),
         ),
       );
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = 'Baglanti gonderilemedi. E-postayi kontrol et.');
+      setState(() => _error = 'Bağlantı gönderilemedi. E-postayı kontrol et.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -83,17 +84,17 @@ class _LoginScreenState extends State<LoginScreen> {
       case 'wrong-password':
       case 'invalid-credential':
       case 'invalid-login-credentials':
-        return 'E-posta veya sifre yanlis.';
+        return 'E-posta veya şifre yanlış.';
       case 'user-not-found':
         return 'Bu e-posta ile hesap yok.';
       case 'user-disabled':
-        return 'Bu hesap kapatilmis.';
+        return 'Bu hesap kapatılmış.';
       case 'too-many-requests':
-        return 'Cok fazla deneme. Biraz bekleyip tekrar dene.';
+        return 'Çok fazla deneme. Biraz bekleyip tekrar dene.';
       case 'network-request-failed':
-        return 'Ag hatasi. Baglantini kontrol et.';
+        return 'Ağ hatası. Bağlantını kontrol et.';
       default:
-        return 'Giris basarisiz. Bilgilerinizi kontrol edin.';
+        return 'Giriş başarısız. Bilgilerinizi kontrol edin.';
     }
   }
 
@@ -129,12 +130,23 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 16),
               TextFormField(
                 controller: _passwordController,
-                obscureText: true,
+                obscureText: _obscurePassword,
                 style: const TextStyle(color: Colors.white),
-                decoration: _fieldDecoration('Sifre'),
+                decoration: _fieldDecoration('Şifre').copyWith(
+                  suffixIcon: IconButton(
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                      color: Colors.white38,
+                    ),
+                  ),
+                ),
                 validator: (value) {
                   if (value == null || value.length < 6) {
-                    return 'Sifre en az 6 karakter olmali';
+                    return 'Şifre en az 6 karakter olmalı';
                   }
                   return null;
                 },
@@ -169,7 +181,7 @@ class _LoginScreenState extends State<LoginScreen> {
               TextButton(
                 onPressed: _isLoading ? null : _resetPassword,
                 style: TextButton.styleFrom(foregroundColor: Colors.white54),
-                child: const Text('Sifremi unuttum'),
+                child: const Text('Şifremi unuttum'),
               ),
               TextButton(
                 onPressed: () {
@@ -178,7 +190,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   );
                 },
                 style: TextButton.styleFrom(foregroundColor: Colors.white54),
-                child: const Text('Yeni kayit'),
+                child: const Text('Yeni kayıt'),
               ),
             ],
           ),

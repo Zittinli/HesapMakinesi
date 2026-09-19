@@ -18,6 +18,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmController = TextEditingController();
+  bool _obscurePassword = true;
   bool _acceptedTerms = false;
   bool _isLoading = false;
   String? _error;
@@ -27,13 +29,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmController.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (!_acceptedTerms) {
-      setState(() => _error = 'Kayit icin gizlilik politikasini onaylaman gerekir.');
+      setState(() => _error = 'Kayıt için gizlilik politikasını onaylaman gerekir.');
       return;
     }
 
@@ -57,7 +60,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } on FirebaseAuthException catch (error) {
       setState(() => _error = _authErrorMessage(error));
     } catch (error) {
-      setState(() => _error = 'Kayit basarisiz. Bilgilerinizi kontrol edin.');
+      setState(() => _error = 'Kayıt başarısız. Bilgilerinizi kontrol edin.');
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -68,21 +71,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String _authErrorMessage(FirebaseAuthException error) {
     switch (error.code) {
       case 'email-already-in-use':
-        return 'Bu e-posta zaten kayitli. Giris yapmayi deneyin.';
+        return 'Bu e-posta zaten kayıtlı. Giriş yapmayı deneyin.';
       case 'invalid-email':
-        return 'E-posta adresi gecersiz gorunuyor.';
+        return 'E-posta adresi geçersiz görünüyor.';
       case 'weak-password':
-        return 'Sifre cok zayif. En az 6 karakter kullanin.';
+        return 'Şifre çok zayıf. En az 6 karakter kullanın.';
       case 'network-request-failed':
-        return 'Baglanti kurulamadi. Internetinizi kontrol edin.';
+        return 'Bağlantı kurulamadı. İnternetinizi kontrol edin.';
       case 'too-many-requests':
-        return 'Cok fazla deneme yapildi. Biraz sonra tekrar deneyin.';
+        return 'Çok fazla deneme yapıldı. Biraz sonra tekrar deneyin.';
       case 'operation-not-allowed':
-        return 'E-posta ile kayit su an kapali.';
+        return 'E-posta ile kayıt şu an kapalı.';
       default:
         return error.message?.trim().isNotEmpty == true
             ? error.message!
-            : 'Kayit basarisiz. Bilgilerinizi kontrol edin.';
+            : 'Kayıt başarısız. Bilgilerinizi kontrol edin.';
     }
   }
 
@@ -118,7 +121,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         backgroundColor: const Color(0xFF0B0B0B),
         foregroundColor: Colors.white70,
         elevation: 0,
-        title: const Text('Yeni kayit', style: TextStyle(fontWeight: FontWeight.w400)),
+        title: const Text('Yeni kayıt', style: TextStyle(fontWeight: FontWeight.w400)),
       ),
       body: Form(
         key: _formKey,
@@ -128,7 +131,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             TextFormField(
               controller: _nameController,
               style: const TextStyle(color: Colors.white),
-              decoration: _fieldDecoration('Gorunen ad'),
+              decoration: _fieldDecoration('Görünen ad'),
               validator: (value) {
                 if (value == null || value.trim().isEmpty) {
                   return 'Ad gerekli';
@@ -147,7 +150,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   return 'E-posta gerekli';
                 }
                 if (!value.contains('@')) {
-                  return 'Gecerli bir e-posta yaz';
+                  return 'Geçerli bir e-posta yaz';
                 }
                 return null;
               },
@@ -155,12 +158,36 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const SizedBox(height: 16),
             TextFormField(
               controller: _passwordController,
-              obscureText: true,
+              obscureText: _obscurePassword,
               style: const TextStyle(color: Colors.white),
-              decoration: _fieldDecoration('Sifre'),
+              decoration: _fieldDecoration('Şifre').copyWith(
+                suffixIcon: IconButton(
+                  onPressed: () =>
+                      setState(() => _obscurePassword = !_obscurePassword),
+                  icon: Icon(
+                    _obscurePassword
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    color: Colors.white38,
+                  ),
+                ),
+              ),
               validator: (value) {
                 if (value == null || value.length < 6) {
-                  return 'Sifre en az 6 karakter olmali';
+                  return 'Şifre en az 6 karakter olmalı';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _confirmController,
+              obscureText: _obscurePassword,
+              style: const TextStyle(color: Colors.white),
+              decoration: _fieldDecoration('Şifre tekrar'),
+              validator: (value) {
+                if (value != _passwordController.text) {
+                  return 'Şifreler eşleşmiyor';
                 }
                 return null;
               },
@@ -177,7 +204,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 alignment: Alignment.centerLeft,
                 padding: EdgeInsets.zero,
               ),
-              child: const Text('Gizlilik politikasini oku'),
+              child: const Text('Gizlilik politikasını oku'),
             ),
             CheckboxListTile(
               value: _acceptedTerms,
@@ -216,7 +243,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         color: Colors.white54,
                       ),
                     )
-                  : const Text('Kod gonder ve kayit ol'),
+                  : const Text('Kod gönder ve kayıt ol'),
             ),
           ],
         ),

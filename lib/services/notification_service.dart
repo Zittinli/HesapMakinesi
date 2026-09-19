@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../models/chat_model.dart';
@@ -10,9 +12,10 @@ import '../models/chat_pref_model.dart';
 import '../models/notification_look.dart';
 import 'auth_service.dart';
 import 'chat_service.dart';
+import 'nudge_haptic.dart';
 import 'settings_service.dart';
 
-class NotificationService {
+class NotificationService with WidgetsBindingObserver {
   NotificationService({
     required SettingsService settings,
     required ChatService chatService,
@@ -38,6 +41,8 @@ class NotificationService {
   bool _ready = false;
   bool _primed = false;
   String? _activeUid;
+  DateTime? _startedAt;
+  AppLifecycleState _lifecycle = AppLifecycleState.resumed;
 
   void setHubOpen(bool open) {
     _hubOpen = open;
@@ -46,6 +51,8 @@ class NotificationService {
   Future<void> start() async {
     if (_ready) return;
     _ready = true;
+    _startedAt = DateTime.now();
+    WidgetsBinding.instance.addObserver(this);
     _authSub = _authService.authStateChanges().listen(_onAuth);
     _onAuth(_authService.currentUser);
 
@@ -55,7 +62,23 @@ class NotificationService {
       await _plugin.initialize(
         settings: const InitializationSettings(android: android, iOS: ios),
       );
-    } catch (_) {}
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(
+            const AndroidNotificationChannel(
+              'hm_alert',
+              'Kayıtlar',
+              description: 'Kayıt uyarıları',
+              importance: Importance.high,
+              playSound: true,
+              enableVibration: true,
+            ),
+          );
+    } catch (error) {
+      debugPrint('HM_NOTIFY_INIT_FAILED: $error');
+    }
 
     try {
       await FirebaseMessaging.instance.requestPermission(
@@ -105,21 +128,21 @@ class NotificationService {
           .collection('fcmTokens')
           .doc(id)
           .set({'token': token, 'updatedAt': FieldValue.serverTimestamp()});
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('HM_FCM_TOKEN_FAILED: $error');
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycle = state;
   }
 
   void _onForegroundMessage(RemoteMessage message) {
-    if (_hubOpen) return;
-    final title =
-        message.notification?.title ?? message.data['sender'] ?? 'Kayit';
-    final body = message.notification?.body ?? message.data['preview'] ?? '';
-    unawaited(
-      showMessage(
-        id: (message.data['chatId'] ?? title).hashCode,
-        sender: title,
-        preview: body,
-      ),
-    );
+    if (message.data['type'] == 'nudge' &&
+        NudgeHaptic.isFresh(message.sentTime)) {
+      unawaited(NudgeHaptic.play());
+    }
   }
 
   void _listenChats(String uid) {
@@ -152,6 +175,15 @@ class NotificationService {
       }
       if (_prefs[chat.id]?.muted == true) continue;
       if (_hubOpen) continue;
+      if (_lifecycle != AppLifecycleState.resumed) continue;
+      final started = _startedAt;
+      if (started != null &&
+          DateTime.now().difference(started) < const Duration(seconds: 4)) {
+        continue;
+      }
+      if (DateTime.now().difference(at) > const Duration(seconds: 8)) {
+        continue;
+      }
       unawaited(_showForChat(chat, uid));
     }
   }
@@ -166,7 +198,7 @@ class NotificationService {
       return;
     }
     final otherId = chat.otherParticipantId(uid);
-    var sender = 'Kayit';
+    var sender = 'Kayıt';
     if (otherId.isNotEmpty) {
       final user = await _authService.watchUser(otherId).first;
       if (user != null) {
@@ -207,8 +239,8 @@ class NotificationService {
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
         silent ? 'hm_silent' : 'hm_alert',
-        silent ? 'Hesaplamalar' : 'Kayitlar',
-        channelDescription: silent ? 'Sessiz uyarilar' : 'Kayit uyarilari',
+        silent ? 'Hesaplamalar' : 'Kayıtlar',
+        channelDescription: silent ? 'Sessiz uyarilar' : 'Kayıt uyarilari',
         importance: silent ? Importance.low : Importance.high,
         priority: silent ? Priority.low : Priority.high,
         playSound: _settings.soundEnabled,
@@ -234,10 +266,11 @@ class NotificationService {
   }
 
   Future<void> showPreview() {
-    return showMessage(id: 991991, sender: 'Ahmet', preview: 'Yarin gorusuruz');
+    return showMessage(id: 991991, sender: 'Ahmet', preview: 'Yarın görüşürüz');
   }
 
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _authSub?.cancel();
     _chatsSub?.cancel();
     _prefsSub?.cancel();

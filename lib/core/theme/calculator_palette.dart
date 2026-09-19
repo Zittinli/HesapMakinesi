@@ -26,7 +26,7 @@ extension CalculatorSkinX on CalculatorSkin {
   static CalculatorSkin fromId(String? id) {
     return CalculatorSkin.values.firstWhere(
       (item) => item.name == id,
-      orElse: () => CalculatorSkin.classic,
+      orElse: () => CalculatorSkin.samsung,
     );
   }
 }

@@ -21,9 +21,14 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
 
   void _showError(Object error) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(error.toString().replaceFirst('Bad state: ', ''))),
-    );
+    final raw = error.toString();
+    final text =
+        raw.contains('permission-denied') || raw.contains('PERMISSION_DENIED')
+        ? 'Bu grup işlemi şu an yapılamadı.'
+        : raw
+              .replaceFirst('Bad state: ', '')
+              .replaceFirst('Invalid argument(s): ', '');
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _run(Future<void> Function() action) async {

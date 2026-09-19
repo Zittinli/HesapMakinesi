@@ -53,3 +53,4 @@ key.properties
 *.p12
 *.p8
 serviceAccount*.json
+**/node_modules/

@@ -10,13 +10,13 @@ extension ReportReasonLabel on ReportReason {
       case ReportReason.abuse:
         return 'Taciz / hakaret';
       case ReportReason.hate:
-        return 'Nefret soylemi';
+        return 'Nefret söylemi';
       case ReportReason.sexual:
-        return 'Cinsel icerik';
+        return 'Cinsel içerik';
       case ReportReason.illegal:
-        return 'Yasa disi icerik';
+        return 'Yasa dışı içerik';
       case ReportReason.other:
-        return 'Diger';
+        return 'Diğer';
     }
   }
 }

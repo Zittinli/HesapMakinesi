@@ -103,7 +103,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                   child: _controller.history.isEmpty
                       ? const Center(
                           child: Text(
-                            'Gecmis bos',
+                            'Geçmiş bos',
                             style: TextStyle(color: Colors.white38),
                           ),
                         )
@@ -162,7 +162,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                         vertical: 14,
                       ),
                     ),
-                    child: const Text('Gecmisi temizle'),
+                    child: const Text('Geçmişi temizle'),
                   ),
                 ),
               ],
@@ -194,11 +194,11 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
               children: [
                 if (isSamsung)
                   SizedBox(
-                    height: 56,
+                    height: landscape ? 40 : 56,
                     child: Row(
                       children: [
                         IconButton(
-                          tooltip: 'Gecmis',
+                          tooltip: 'Geçmiş',
                           onPressed: () => _showHistory(palette, settings),
                           icon: const Icon(
                             Icons.history,
@@ -318,9 +318,9 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                   ),
                 ),
                 Expanded(
-                  flex: landscape ? 5 : 4,
+                  flex: landscape ? 8 : 4,
                   child: Padding(
-                    padding: EdgeInsets.all(landscape ? 6 : 12),
+                    padding: EdgeInsets.all(landscape ? 3 : 9),
                     child: ListenableBuilder(
                       listenable: _controller,
                       builder: (context, _) {
@@ -367,7 +367,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         Expanded(
           flex: !compact && !isSamsung && label == '0' ? 2 : 1,
           child: Padding(
-            padding: EdgeInsets.all(compact ? 3 : 6),
+            padding: EdgeInsets.all(compact ? 2 : 3),
             child: _CalcButton(
               label: label == 'Deg'
                   ? (_controller.useDegrees ? 'Deg' : 'Rad')
@@ -442,11 +442,11 @@ class _CalcButton extends StatelessWidget {
             final side = constraints.maxWidth < constraints.maxHeight
                 ? constraints.maxWidth
                 : constraints.maxHeight;
-            final fontSize = (side * (compact ? 0.34 : 0.38)).clamp(
-              11.0,
-              compact ? 18.0 : 32.0,
+            final fontSize = (side * 0.40).clamp(
+              compact ? 13.0 : 12.0,
+              compact ? 22.0 : 34.0,
             );
-            final iconSize = (side * 0.36).clamp(14.0, compact ? 20.0 : 28.0);
+            final iconSize = (side * 0.38).clamp(14.0, compact ? 22.0 : 30.0);
 
             return Center(
               child: label == '⌫'
@@ -479,7 +479,9 @@ class _CalcButton extends StatelessWidget {
             : constraints.maxHeight;
         return Center(
           child: SizedBox.square(
-            dimension: shortest * (compact ? 0.9 : 0.88),
+            dimension: compact
+                ? shortest * 0.98
+                : (shortest * 0.88 + 6).clamp(0.0, shortest),
             child: button,
           ),
         );

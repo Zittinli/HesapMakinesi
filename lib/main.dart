@@ -9,11 +9,17 @@ import 'firebase_options.dart';
 import 'services/auth_service.dart';
 import 'services/chat_service.dart';
 import 'services/notification_service.dart';
+import 'services/nudge_haptic.dart';
+import 'services/nudge_service.dart';
 import 'services/settings_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  if (message.data['type'] == 'nudge' && NudgeHaptic.isFresh(message.sentTime)) {
+    await NudgeHaptic.play();
+  }
 }
 
 Future<void> main() async {
@@ -31,6 +37,10 @@ Future<void> main() async {
     chatService: chatService,
     authService: authService,
   );
+  final nudgeService = NudgeService(
+    authService: authService,
+    chatService: chatService,
+  );
 
   runApp(
     HesapMakinesiApp(
@@ -38,7 +48,9 @@ Future<void> main() async {
       authService: authService,
       chatService: chatService,
       notificationService: notificationService,
+      nudgeService: nudgeService,
     ),
   );
   unawaited(notificationService.start());
+  nudgeService.start();
 }

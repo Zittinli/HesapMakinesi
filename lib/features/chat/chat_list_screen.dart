@@ -15,9 +15,9 @@ class ChatListScreen extends StatelessWidget {
 
   String _formatLastSeen(AppUser? user) {
     if (user == null) return '';
-    if (user.isOnline) return 'Cevrimici';
-    if (user.lastSeen == null) return 'Son gorulme bilinmiyor';
-    return 'Son gorulme: ${DateFormat('dd.MM.yyyy HH:mm').format(user.lastSeen!)}';
+    if (user.isOnline) return 'Çevrimiçi';
+    if (user.lastSeen == null) return 'Son görülme bilinmiyor';
+    return 'Son görülme: ${DateFormat('dd.MM.yyyy HH:mm').format(user.lastSeen!)}';
   }
 
   @override
@@ -58,7 +58,7 @@ class ChatListScreen extends StatelessWidget {
           final chats = snapshot.data ?? [];
           if (chats.isEmpty) {
             return const Center(
-              child: Text('Henuz sohbet yok. Yeni kisi arayin.'),
+              child: Text('Henüz sohbet yok. Yeni kişi arayın.'),
             );
           }
 

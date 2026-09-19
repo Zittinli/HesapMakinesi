@@ -9,6 +9,7 @@ import 'services/auth_service.dart';
 import 'services/auth_log_service.dart';
 import 'services/chat_service.dart';
 import 'services/notification_service.dart';
+import 'services/nudge_service.dart';
 import 'services/moderation_service.dart';
 import 'services/settings_service.dart';
 import 'services/storage_service.dart';
@@ -20,12 +21,14 @@ class HesapMakinesiApp extends StatelessWidget {
     required this.authService,
     required this.chatService,
     required this.notificationService,
+    required this.nudgeService,
   });
 
   final SettingsService settings;
   final AuthService authService;
   final ChatService chatService;
   final NotificationService notificationService;
+  final NudgeService nudgeService;
 
   @override
   Widget build(BuildContext context) {
@@ -38,6 +41,7 @@ class HesapMakinesiApp extends StatelessWidget {
         Provider(create: (_) => ModerationService()),
         Provider(create: (_) => AuthLogService()),
         Provider<NotificationService>.value(value: notificationService),
+        ChangeNotifierProvider<NudgeService>.value(value: nudgeService),
       ],
       child: MaterialApp(
         title: 'HesapMakinesi',

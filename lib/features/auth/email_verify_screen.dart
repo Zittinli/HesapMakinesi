@@ -52,7 +52,7 @@ class _EmailVerifyScreenState extends State<EmailVerifyScreen> {
           await context.read<AuthService>().refreshEmailVerified();
       if (!mounted) return;
       if (!verified && !silent) {
-        setState(() => _error = 'Adres henuz dogrulanmamis. Postani kontrol et.');
+        setState(() => _error = 'Adres henüz doğrulanmamış. Postanı kontrol et.');
       }
     } catch (_) {
       if (mounted && !silent) {
@@ -73,11 +73,11 @@ class _EmailVerifyScreenState extends State<EmailVerifyScreen> {
     try {
       await context.read<AuthService>().sendVerificationEmail();
       if (mounted) {
-        setState(() => _info = 'Dogrulama baglantisi tekrar gonderildi.');
+        setState(() => _info = 'Doğrulama bağlantısı tekrar gönderildi.');
       }
     } catch (_) {
       if (mounted) {
-        setState(() => _error = 'Baglanti gonderilemedi. Birazdan tekrar dene.');
+        setState(() => _error = 'Bağlantı gönderilemedi. Birazdan tekrar dene.');
       }
     } finally {
       if (mounted) setState(() => _isResending = false);
@@ -95,7 +95,7 @@ class _EmailVerifyScreenState extends State<EmailVerifyScreen> {
         foregroundColor: Colors.white70,
         elevation: 0,
         title: const Text(
-          'E-posta onayi',
+          'E-posta onayı',
           style: TextStyle(fontWeight: FontWeight.w400),
         ),
         leading: IconButton(
@@ -116,13 +116,13 @@ class _EmailVerifyScreenState extends State<EmailVerifyScreen> {
             const SizedBox(height: 20),
             Text(
               email.isEmpty
-                  ? 'Adresine bir dogrulama baglantisi gonderildi.'
-                  : '$email adresine bir dogrulama baglantisi gonderildi.',
+                  ? 'Adresine bir doğrulama bağlantısı gönderildi.'
+                  : '$email adresine bir doğrulama bağlantısı gönderildi.',
               style: const TextStyle(color: Colors.white70, height: 1.4),
             ),
             const SizedBox(height: 8),
             const Text(
-              'Postandaki baglantiya dokun, sonra bu ekrana don. '
+              'Postandaki bağlantıya dokun, sonra bu ekrana dön. '
               'Onay gelince otomatik olarak devam eder.',
               style: TextStyle(color: Colors.white38, fontSize: 13, height: 1.4),
             ),
@@ -159,19 +159,19 @@ class _EmailVerifyScreenState extends State<EmailVerifyScreen> {
                         color: Colors.white54,
                       ),
                     )
-                  : const Text('Dogruladim, devam et'),
+                  : const Text('Doğruladım, devam et'),
             ),
             TextButton(
               onPressed: _isResending ? null : _resend,
               style: TextButton.styleFrom(foregroundColor: Colors.white54),
               child: Text(
-                _isResending ? 'Gonderiliyor...' : 'Baglantiyi tekrar gonder',
+                _isResending ? 'Gönderiliyor...' : 'Bağlantıyı tekrar gönder',
               ),
             ),
             TextButton(
               onPressed: () => context.read<AuthService>().signOut(),
               style: TextButton.styleFrom(foregroundColor: Colors.white38),
-              child: const Text('Giris ekranina don'),
+              child: const Text('Giriş ekranına dön'),
             ),
           ],
         ),
