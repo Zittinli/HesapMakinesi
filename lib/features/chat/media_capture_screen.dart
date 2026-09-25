@@ -37,6 +37,7 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
   bool _recording = false;
   bool _recordPaused = false;
   bool _switchingCamera = false;
+  bool _processing = false;
   bool _torchOn = false;
   CapturedMedia? _preview;
   VideoPlayerController? _video;
@@ -290,6 +291,7 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
     if (camera == null || !camera.value.isInitialized) return;
     try {
       if (_recording) {
+        setState(() => _processing = true);
         File? last;
         if (camera.value.isRecordingVideo) {
           last = await _moveToTemp(await camera.stopVideoRecording(), '.mp4');
@@ -302,6 +304,7 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
           setState(() {
             _recording = false;
             _recordPaused = false;
+            _processing = false;
           });
           return;
         }
@@ -320,6 +323,7 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
             isVideo: true,
             contentType: 'video/mp4',
           );
+          _processing = false;
         });
       } else {
         _videoSegments.clear();
@@ -337,6 +341,7 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
         setState(() {
           _recording = false;
           _recordPaused = false;
+          _processing = false;
         });
         ScaffoldMessenger.of(
           context,
@@ -542,11 +547,22 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
               const ColoredBox(color: Colors.black),
             if (camera == null ||
                 !camera.value.isInitialized ||
-                _switchingCamera)
+                _switchingCamera ||
+                _processing)
               const ColoredBox(
-                color: Color(0x66000000),
+                color: Color(0x99000000),
                 child: Center(
-                  child: CircularProgressIndicator(color: Colors.white70),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(color: Colors.white70),
+                      SizedBox(height: 12),
+                      Text(
+                        'Hazırlanıyor...',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             if (_recording)

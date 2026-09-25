@@ -533,14 +533,27 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(top: 8, bottom: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
               ListTile(
+                dense: true,
+                visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
+                minLeadingWidth: 22,
                 leading: Icon(
                   pref.pinned ? Icons.push_pin : Icons.push_pin_outlined,
                   color: Colors.white70,
+                  size: 18,
                 ),
                 title: Text(
                   pref.pinned ? 'Sabiti kaldır' : 'Sabitle',
-                  style: const TextStyle(color: Colors.white70),
+                  style: const TextStyle(color: Colors.white70, fontSize: 14),
                 ),
                 onTap: () {
                   Navigator.pop(context);
@@ -552,15 +565,19 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                 },
               ),
               ListTile(
+                dense: true,
+                visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
+                minLeadingWidth: 22,
                 leading: Icon(
                   pref.muted
                       ? Icons.volume_up_outlined
                       : Icons.volume_off_outlined,
                   color: Colors.white70,
+                  size: 18,
                 ),
                 title: Text(
                   pref.muted ? 'Sesi aç' : 'Sessize al',
-                  style: const TextStyle(color: Colors.white70),
+                  style: const TextStyle(color: Colors.white70, fontSize: 14),
                 ),
                 onTap: () {
                   Navigator.pop(context);
@@ -572,13 +589,17 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                 },
               ),
               ListTile(
+                dense: true,
+                visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
+                minLeadingWidth: 22,
                 leading: const Icon(
                   Icons.visibility_off_outlined,
-                  color: Colors.white70,
+                  color: Colors.white54,
+                  size: 18,
                 ),
                 title: const Text(
                   'Gizle',
-                  style: TextStyle(color: Colors.white70),
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
                 ),
                 onTap: () {
                   Navigator.pop(context);
@@ -590,13 +611,17 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                 },
               ),
               ListTile(
+                dense: true,
+                visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
+                minLeadingWidth: 22,
                 leading: const Icon(
                   Icons.delete_outline,
                   color: Color(0xFFFF8A80),
+                  size: 18,
                 ),
                 title: const Text(
                   'Sil',
-                  style: TextStyle(color: Color(0xFFFF8A80)),
+                  style: TextStyle(color: Color(0xFFFF8A80), fontSize: 14),
                 ),
                 onTap: () async {
                   Navigator.pop(context);

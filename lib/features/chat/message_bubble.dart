@@ -45,106 +45,128 @@ class MessageBubble extends StatelessWidget {
       alignment: alignment,
       child: GestureDetector(
         onLongPress: onLongPress,
-        onTap: message.hasMedia ? onMediaTap : null,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78,
+        onTap: message.hasMedia || message.hasFile ? onMediaTap : null,
+        child: Padding(
+          padding: EdgeInsets.only(
+            top: message.reactions.isEmpty ? 0 : 8,
           ),
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: highlighted
-                  ? const Color(0xFFFFCC80)
-                  : const Color(0xFF2C2C2C),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: isMine
-                ? CrossAxisAlignment.end
-                : CrossAxisAlignment.start,
+          child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              if (!isMine && (senderLabel ?? '').isNotEmpty) ...[
-                Text(
-                  senderLabel!,
-                  style: const TextStyle(
-                    color: Color(0xFF90CAF9),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width * 0.78,
+                ),
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: highlighted
+                        ? const Color(0xFFFFCC80)
+                        : const Color(0xFF2C2C2C),
                   ),
                 ),
-                const SizedBox(height: 5),
-              ],
-              if (message.replyToText != null &&
-                  message.replyToText!.isNotEmpty)
-                GestureDetector(
-                  onTap: onReplyTap,
-                  child: Container(
-                    width: double.infinity,
-                    margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF111111),
-                      borderRadius: BorderRadius.circular(8),
-                      border: const Border(
-                        left: BorderSide(color: Color(0xFF666666), width: 2),
+                child: Column(
+                  crossAxisAlignment: isMine
+                      ? CrossAxisAlignment.end
+                      : CrossAxisAlignment.start,
+                  children: [
+                    if (!isMine && (senderLabel ?? '').isNotEmpty) ...[
+                      Text(
+                        senderLabel!,
+                        style: const TextStyle(
+                          color: Color(0xFF90CAF9),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      message.replyToText!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ),
-              if (message.hasMedia)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: message.type == MessageType.video
-                      ? const _VideoThumb()
-                      : ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(
-                              maxWidth: 240,
-                              maxHeight: 280,
+                      const SizedBox(height: 5),
+                    ],
+                    if (message.replyToText != null &&
+                        message.replyToText!.isNotEmpty)
+                      GestureDetector(
+                        onTap: onReplyTap,
+                        child: Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF111111),
+                            borderRadius: BorderRadius.circular(8),
+                            border: const Border(
+                              left: BorderSide(color: Color(0xFF666666), width: 2),
                             ),
-                            child: CachedNetworkImage(
-                              imageUrl: message.mediaUrl!,
-                              fit: BoxFit.contain,
-                              memCacheWidth: 720,
+                          ),
+                          child: Text(
+                            message.replyToText!,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white54,
+                              fontSize: 12,
                             ),
                           ),
                         ),
-                )
-              else if (message.text.isNotEmpty)
-                _LinkText(text: message.text, links: links),
-              if (links.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                ...links.map((link) => _LinkCard(link: link)),
-              ],
-              const SizedBox(height: 4),
-              if (message.expiresAt != null)
-                TickingBuilder(
-                  builder: (_) => _MessageStatus(
-                    message: message,
-                    isMine: isMine,
-                    isRead: isRead,
-                    pending: pending,
-                  ),
-                )
-              else
-                _MessageStatus(
-                  message: message,
-                  isMine: isMine,
-                  isRead: isRead,
-                  pending: pending,
+                      ),
+                    if (message.hasMedia)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: message.type == MessageType.video
+                            ? const _VideoThumb()
+                            : ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 240,
+                                    maxHeight: 280,
+                                  ),
+                                  child: CachedNetworkImage(
+                                    imageUrl: message.mediaUrl!,
+                                    fit: BoxFit.contain,
+                                    memCacheWidth: 720,
+                                  ),
+                                ),
+                              ),
+                      )
+                    else if (message.hasFile)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: _FileChip(message: message),
+                      )
+                    else if (message.text.isNotEmpty)
+                      _LinkText(text: message.text, links: links),
+                    if (links.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      ...links.map((link) => _LinkCard(link: link)),
+                    ],
+                    const SizedBox(height: 4),
+                    if (message.expiresAt != null)
+                      TickingBuilder(
+                        builder: (_) => _MessageStatus(
+                          message: message,
+                          isMine: isMine,
+                          isRead: isRead,
+                          pending: pending,
+                        ),
+                      )
+                    else
+                      _MessageStatus(
+                        message: message,
+                        isMine: isMine,
+                        isRead: isRead,
+                        pending: pending,
+                      ),
+                  ],
+                ),
+              ),
+              if (message.reactions.isNotEmpty)
+                Positioned(
+                  top: -2,
+                  right: isMine ? 18 : null,
+                  left: isMine ? null : 18,
+                  child: _ReactionBadge(counts: message.reactionCounts),
                 ),
             ],
           ),
@@ -306,6 +328,92 @@ class _MessageStatus extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _FileChip extends StatelessWidget {
+  const _FileChip({required this.message});
+
+  final ChatMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = message.fileSize;
+    final sizeLabel = size == null
+        ? ''
+        : size >= 1024 * 1024
+        ? '${(size / (1024 * 1024)).toStringAsFixed(1)} MB'
+        : '${(size / 1024).ceil()} KB';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111111),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.insert_drive_file_outlined, color: Colors.white70, size: 20),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  message.preview,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                ),
+                if (sizeLabel.isNotEmpty)
+                  Text(
+                    sizeLabel,
+                    style: const TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReactionBadge extends StatelessWidget {
+  const _ReactionBadge({required this.counts});
+
+  final Map<String, int> counts;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1C1C),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF3A3A3A)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final item in items.take(3)) ...[
+            Text(item.key, style: const TextStyle(fontSize: 12, height: 1)),
+            if (item.value > 1)
+              Padding(
+                padding: const EdgeInsets.only(left: 2, right: 4),
+                child: Text(
+                  '${item.value}',
+                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                ),
+              )
+            else
+              const SizedBox(width: 4),
+          ],
+        ],
+      ),
     );
   }
 }

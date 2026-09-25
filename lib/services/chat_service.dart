@@ -577,13 +577,26 @@ class ChatService {
       createdAt: DateTime.now(),
       readBy: [senderId],
       replyToId: replyTo?.id,
-      replyToText: _clip(replyTo?.text, 400),
+      replyToText: _clip(replyTo?.preview, 400),
       replyToSenderId: replyTo?.senderId,
       expiresAt: expiresAt,
       expireSeconds: expireSeconds,
     );
 
     await _sendMessage(chatId, message, preview: trimmed);
+  }
+
+  static String mediaLabel(
+    MessageType type, {
+    String? fileName,
+  }) {
+    if (type == MessageType.video) return 'Video';
+    if (type == MessageType.file) {
+      final name = (fileName ?? '').trim();
+      return name.isEmpty ? 'Dosya' : name;
+    }
+    if (type == MessageType.image) return 'Fotoğraf';
+    return 'Mesaj';
   }
 
   Future<void> sendMediaMessage({
@@ -593,6 +606,9 @@ class ChatService {
     required MessageType type,
     ChatMessage? replyTo,
     int? expireSeconds,
+    String? fileName,
+    int? fileSize,
+    String? fileMime,
   }) async {
     final chatSnap = await _chats.doc(chatId).get();
     final chat = chatSnap.exists ? ChatRoom.fromFirestore(chatSnap) : null;
@@ -602,22 +618,44 @@ class ChatService {
     final expiresAt = expireSeconds == null
         ? null
         : DateTime.now().add(Duration(seconds: expireSeconds));
-    final label = type == MessageType.video ? 'Video' : 'Fotoğraf';
+    final label = mediaLabel(type, fileName: fileName);
     final message = ChatMessage(
       id: '',
       senderId: senderId,
       text: label,
       type: type,
       mediaUrl: mediaUrl,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileMime: fileMime,
       createdAt: DateTime.now(),
       readBy: [senderId],
       replyToId: replyTo?.id,
-      replyToText: _clip(replyTo?.text, 400),
+      replyToText: _clip(replyTo?.preview, 400),
       replyToSenderId: replyTo?.senderId,
       expiresAt: expiresAt,
       expireSeconds: expireSeconds,
     );
     await _sendMessage(chatId, message, preview: label);
+  }
+
+  Future<void> setReaction({
+    required String chatId,
+    required String messageId,
+    required String userId,
+    required String emoji,
+    required Map<String, String> current,
+  }) async {
+    if (chatId.isEmpty || messageId.startsWith('local-')) return;
+    final next = Map<String, String>.from(current);
+    if (next[userId] == emoji) {
+      next.remove(userId);
+    } else {
+      next[userId] = emoji;
+    }
+    await _chats.doc(chatId).collection('messages').doc(messageId).update({
+      'reactions': next,
+    });
   }
 
   Future<List<ChatMessage>> searchMessagesInChat({
@@ -1121,7 +1159,7 @@ class ChatService {
       createdAt: DateTime.now(),
       readBy: [senderId],
       replyToId: replyTo?.id,
-      replyToText: _clip(replyTo?.text, 400),
+      replyToText: _clip(replyTo?.preview, 400),
       replyToSenderId: replyTo?.senderId,
       expiresAt: expiresAt,
       expireSeconds: expireSeconds,
@@ -1152,22 +1190,28 @@ class ChatService {
     required MessageType type,
     ChatMessage? replyTo,
     int? expireSeconds,
+    String? fileName,
+    int? fileSize,
+    String? fileMime,
   }) async {
     final email = recipientEmail.trim().toLowerCase();
     final expiresAt = expireSeconds == null
         ? null
         : DateTime.now().add(Duration(seconds: expireSeconds));
-    final label = type == MessageType.video ? 'Video' : 'Fotoğraf';
+    final label = mediaLabel(type, fileName: fileName);
     final message = ChatMessage(
       id: '',
       senderId: senderId,
       text: label,
       type: type,
       mediaUrl: mediaUrl,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileMime: fileMime,
       createdAt: DateTime.now(),
       readBy: [senderId],
       replyToId: replyTo?.id,
-      replyToText: _clip(replyTo?.text, 400),
+      replyToText: _clip(replyTo?.preview, 400),
       replyToSenderId: replyTo?.senderId,
       expiresAt: expiresAt,
       expireSeconds: expireSeconds,

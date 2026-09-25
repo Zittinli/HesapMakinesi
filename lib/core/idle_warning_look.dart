@@ -15,25 +15,37 @@ class IdleWarningLook {
   }
 
   static double ease(double progress) =>
-      Curves.easeInCubic.transform(progress.clamp(0.0, 1.0));
+      Curves.easeInOutCubic.transform(progress.clamp(0.0, 1.0));
 
   static Color scaffold(double progress) {
-    return Color.lerp(_resting, const Color(0xFF1C0A10), ease(progress))!;
+    return Color.lerp(_resting, const Color(0xFF161018), ease(progress))!;
   }
 
   static Color appBar(double progress) {
-    return Color.lerp(_resting, const Color(0xFF4A1520), ease(progress))!;
+    return Color.lerp(_resting, const Color(0xFF2A1822), ease(progress))!;
   }
 
   static Color nameWash(double progress) {
-    return Color.lerp(Colors.transparent, const Color(0x8A5C1A28), ease(progress))!;
+    return Color.lerp(
+      Colors.transparent,
+      const Color(0x664E2A38),
+      ease(progress),
+    )!;
   }
 
   static Color overlayInner(double progress) {
-    return Color.lerp(const Color(0x00000000), const Color(0x335C1A28), ease(progress))!;
+    return Color.lerp(
+      const Color(0x00000000),
+      const Color(0x334E2A38),
+      ease(progress),
+    )!;
   }
 
   static Color overlayEdge(double progress) {
-    return Color.lerp(const Color(0x00000000), const Color(0x8F5C1A28), ease(progress))!;
+    return Color.lerp(
+      const Color(0x00000000),
+      const Color(0x735C2438),
+      ease(progress),
+    )!;
   }
 }

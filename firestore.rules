@@ -514,6 +514,9 @@ service cloud.firestore {
           'text',
           'type',
           'mediaUrl',
+          'fileName',
+          'fileSize',
+          'fileMime',
           'tokens',
           'createdAt',
           'readBy',
@@ -525,15 +528,20 @@ service cloud.firestore {
           'expireSeconds',
           'deletedFor',
           'deletedForEveryone',
-          'editedAt'
+          'editedAt',
+          'reactions'
         ])
         && data.senderId is string
         && data.senderId.size() > 0
         && data.senderId.size() <= 128
         && data.text is string
         && data.text.size() <= 4000
-        && data.type in ['text', 'image', 'video']
+        && data.type in ['text', 'image', 'video', 'file']
         && (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 2000))
+        && (!('fileName' in data) || data.fileName == null || (data.fileName is string && data.fileName.size() <= 200))
+        && (!('fileSize' in data) || data.fileSize == null || (data.fileSize is number && data.fileSize >= 0 && data.fileSize <= 78643200))
+        && (!('fileMime' in data) || data.fileMime == null || (data.fileMime is string && data.fileMime.size() <= 120))
+        && (!('reactions' in data) || (data.reactions is map && data.reactions.size() <= 80))
         && (!('tokens' in data) || (data.tokens is list && data.tokens.size() <= 40))
         && (data.createdAt == null || data.createdAt is timestamp)
         && isValidUidList(data.readBy, 20)
@@ -638,6 +646,13 @@ service cloud.firestore {
         && request.resource.data.editedAt is timestamp
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['text', 'editedAt', 'tokens']);
+    }
+
+    function onlyReactionUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['reactions'])
+        && request.resource.data.reactions is map
+        && request.resource.data.reactions.size() <= 80;
     }
 
     match /users/{userId} {
@@ -835,7 +850,7 @@ service cloud.firestore {
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 4000
           && isValidMessage(request.resource.data)
-          && request.resource.data.type in ['text', 'image', 'video']
+          && request.resource.data.type in ['text', 'image', 'video', 'file']
           && request.resource.data.readBy.toSet()
             .hasOnly(chatDoc(chatId).data.participants)
           && (
@@ -864,6 +879,7 @@ service cloud.firestore {
             || senderSoftDeleteUpdate()
             || senderEditUpdate()
             || onlyReadReceiptUpdate()
+            || onlyReactionUpdate()
           );
 
         allow delete: if isChatParticipant(chatId)

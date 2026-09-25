@@ -101,6 +101,36 @@ void main() {
       expect(message.toFirestore().containsKey('expireSeconds'), isFalse);
     });
 
+    test('dosya onizlemesi dosya adini kullanir', () {
+      const message = ChatMessage(
+        id: 'f1',
+        senderId: 'a',
+        text: 'Dosya',
+        createdAt: null,
+        readBy: ['a'],
+        type: MessageType.file,
+        mediaUrl: 'https://example.com/x',
+        fileName: 'sozlesme.pdf',
+        fileSize: 1200,
+      );
+      expect(message.preview, 'sozlesme.pdf');
+      expect(message.hasFile, isTrue);
+      expect(message.hasMedia, isFalse);
+    });
+
+    test('reaksiyon sayilarini birlestirir', () {
+      const message = ChatMessage(
+        id: 'r1',
+        senderId: 'a',
+        text: 'hi',
+        createdAt: null,
+        readBy: ['a'],
+        reactions: {'u1': '👍', 'u2': '👍', 'u3': '❤️'},
+      );
+      expect(message.reactionCounts['👍'], 2);
+      expect(message.reactionCounts['❤️'], 1);
+    });
+
     test('benden silinen mesaj sadece o kullanıcıya gizlenir', () {
       final message = ChatMessage(
         id: '3',

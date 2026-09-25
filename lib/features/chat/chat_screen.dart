@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -24,6 +26,9 @@ import 'group_details_screen.dart';
 import 'media_capture_screen.dart';
 import 'media_viewer_screen.dart';
 import 'message_bubble.dart';
+import 'reply_swipe.dart';
+import 'typing_bubble.dart';
+import 'unread_divider.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -62,6 +67,8 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _readDebounce;
   bool _isSending = false;
   bool _mediaUploading = false;
+  bool _sendingText = false;
+  bool _didInitialAlign = false;
   final List<ChatMessage> _pendingOutgoing = [];
   Timer? _idleTimer;
   DateTime? _idleDeadline;
@@ -150,6 +157,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onComposerFocus() {
+    if (mounted) setState(() {});
     if (_focusNode.hasFocus) {
       _holdIdleWhileTyping();
       return;
@@ -243,8 +251,8 @@ class _ChatScreenState extends State<ChatScreen> {
   double get _idleWarningProgress => IdleWarningLook.progress(_idleDeadline);
 
   Future<void> _sendText() async {
-    final text = _messageController.text;
-    if (text.trim().isEmpty) return;
+    final text = _messageController.text.trim();
+    if (text.isEmpty || _sendingText) return;
 
     final currentUser = context.read<AuthService>().currentUser!;
     try {
@@ -270,17 +278,21 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.clear();
     final reply = _replyTo;
     final ttl = _expireSeconds;
+    final now = DateTime.now();
     final pending = ChatMessage(
-      id: 'local-${DateTime.now().microsecondsSinceEpoch}',
+      id: 'local-${now.microsecondsSinceEpoch}',
       senderId: _myUid!,
       text: text,
-      createdAt: DateTime.now(),
+      createdAt: now,
       readBy: [_myUid!],
       replyToId: reply?.id,
-      replyToText: reply?.text,
+      replyToText: reply?.preview,
       replyToSenderId: reply?.senderId,
+      expireSeconds: ttl,
+      expiresAt: ttl == null ? null : now.add(Duration(seconds: ttl)),
     );
     setState(() {
+      _sendingText = true;
       _replyTo = null;
       _pendingOutgoing.add(pending);
     });
@@ -307,24 +319,38 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
       _typingSent = false;
-      _scrollToBottom();
+      if (!_showJumpDown) _scrollToBottom();
     } on ChatBlockedException catch (error) {
+      _dropPending(pending.id);
       if (mounted) {
+        setState(() {
+          _replyTo = reply;
+          _messageController.text = text;
+        });
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
       }
-    } catch (_) {
+    } catch (error, stackTrace) {
+      debugPrint('HM_SEND_FAILED: $error\n$stackTrace');
+      _dropPending(pending.id);
       if (mounted) {
+        setState(() {
+          _replyTo = reply;
+          _messageController.text = text;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Mesaj gönderilemedi. Tekrar deneyin.')),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _pendingOutgoing.removeWhere((item) => item.id == pending.id));
-      }
+      if (mounted) setState(() => _sendingText = false);
     }
+  }
+
+  void _dropPending(String id) {
+    if (!mounted) return;
+    setState(() => _pendingOutgoing.removeWhere((item) => item.id == id));
   }
 
   Future<void> _captureMedia() async {
@@ -335,7 +361,77 @@ class _ChatScreenState extends State<ChatScreen> {
     await _sendMedia(captured);
   }
 
-  Future<void> _sendMedia(CapturedMedia captured) async {
+  Future<void> _pickAndSendFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        withData: false,
+        allowMultiple: false,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final picked = result.files.single;
+      final path = picked.path;
+      if (path == null || path.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Dosya açılamadı.')),
+          );
+        }
+        return;
+      }
+      final file = File(path);
+      await _sendMedia(
+        CapturedMedia(
+          file: file,
+          isVideo: false,
+          contentType: picked.extension == null
+              ? 'application/octet-stream'
+              : _mimeFor(picked.extension!, picked.name),
+        ),
+        fileName: picked.name,
+        fileSize: picked.size,
+        asFile: true,
+      );
+    } catch (error) {
+      debugPrint('HM_FILE_PICK_FAILED: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Dosya seçilemedi.')),
+        );
+      }
+    }
+  }
+
+  String _mimeFor(String ext, String name) {
+    final e = ext.toLowerCase();
+    if (e == 'pdf') return 'application/pdf';
+    if (e == 'txt') return 'text/plain';
+    if (e == 'csv') return 'text/csv';
+    if (e == 'zip') return 'application/zip';
+    if (e == 'doc') return 'application/msword';
+    if (e == 'docx') {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+    if (e == 'xls') return 'application/vnd.ms-excel';
+    if (e == 'xlsx') {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
+    if (e == 'ppt' || e == 'pptx') return 'application/vnd.ms-powerpoint';
+    if (e == 'png') return 'image/png';
+    if (e == 'jpg' || e == 'jpeg') return 'image/jpeg';
+    if (e == 'webp') return 'image/webp';
+    if (e == 'mp4') return 'video/mp4';
+    if (e == 'mp3') return 'audio/mpeg';
+    if (e == 'm4a') return 'audio/mp4';
+    if (name.toLowerCase().endsWith('.pdf')) return 'application/pdf';
+    return 'application/octet-stream';
+  }
+
+  Future<void> _sendMedia(
+    CapturedMedia captured, {
+    String? fileName,
+    int? fileSize,
+    bool asFile = false,
+  }) async {
     if (_mediaUploading) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Önceki medya arka planda yükleniyor.')),
@@ -351,8 +447,14 @@ class _ChatScreenState extends State<ChatScreen> {
         folder: folder,
         file: captured.file,
         contentType: captured.contentType,
+        fileName: fileName,
       );
-      final type = captured.isVideo ? MessageType.video : MessageType.image;
+      final type = asFile
+          ? MessageType.file
+          : captured.isVideo
+          ? MessageType.video
+          : MessageType.image;
+      final size = fileSize ?? await captured.file.length();
       final chatService = _chatService!;
       if (widget.chatId.isEmpty && (widget.pendingEmail ?? '').isNotEmpty) {
         await chatService.sendPendingMedia(
@@ -362,6 +464,9 @@ class _ChatScreenState extends State<ChatScreen> {
           type: type,
           replyTo: _replyTo,
           expireSeconds: _expireSeconds,
+          fileName: fileName,
+          fileSize: size,
+          fileMime: captured.contentType,
         );
       } else {
         await chatService.sendMediaMessage(
@@ -371,10 +476,13 @@ class _ChatScreenState extends State<ChatScreen> {
           type: type,
           replyTo: _replyTo,
           expireSeconds: _expireSeconds,
+          fileName: fileName,
+          fileSize: size,
+          fileMime: captured.contentType,
         );
       }
       if (mounted) setState(() => _replyTo = null);
-      _scrollToBottom();
+      if (!_showJumpDown) _scrollToBottom();
     } on MediaUploadException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -722,13 +830,23 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  String? _firstUnreadIdOf(List<ChatMessage> messages, String uid) {
+    for (final message in messages) {
+      if (message.id.startsWith('local-')) continue;
+      if (message.senderId == uid) continue;
+      if (!message.readBy.contains(uid)) return message.id;
+    }
+    return null;
+  }
+
   bool _sameMessages(List<ChatMessage> a, List<ChatMessage> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i].id != b[i].id ||
           a[i].text != b[i].text ||
           a[i].readBy.length != b[i].readBy.length ||
-          a[i].editedAt != b[i].editedAt) {
+          a[i].editedAt != b[i].editedAt ||
+          a[i].reactions.length != b[i].reactions.length) {
         return false;
       }
     }
@@ -1105,163 +1223,243 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _react(ChatMessage message, String emoji) async {
+    if (widget.chatId.isEmpty || message.id.startsWith('local-')) return;
+    final uid = _myUid;
+    if (uid == null) return;
+    try {
+      await _chatService?.setReaction(
+        chatId: widget.chatId,
+        messageId: message.id,
+        userId: uid,
+        emoji: emoji,
+        current: message.reactions,
+      );
+    } catch (error) {
+      debugPrint('HM_REACT_FAILED: $error');
+    }
+  }
+
   Future<void> _onMessageLongPress(
     ChatMessage message,
     bool isMine,
     ChatRoom? chat,
   ) async {
+    final favorites = context.read<SettingsService>().favoriteEmojis;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF161616),
+      backgroundColor: const Color(0xFF141414),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (context) {
+        Widget item({
+          required IconData icon,
+          required String label,
+          required VoidCallback onTap,
+          Color? color,
+        }) {
+          return ListTile(
+            dense: true,
+            visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
+            minLeadingWidth: 22,
+            leading: Icon(icon, color: color ?? Colors.white70, size: 18),
+            title: Text(
+              label,
+              style: TextStyle(color: color ?? Colors.white70, fontSize: 13.5),
+            ),
+            onTap: onTap,
+          );
+        }
+
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (!message.hasMedia)
-                ListTile(
-                  leading: const Icon(Icons.copy, color: Colors.white70),
-                  title: const Text(
-                    'Kopyala',
-                    style: TextStyle(color: Colors.white70),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(top: 8, bottom: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(4),
                   ),
-                  onTap: () {
-                    Clipboard.setData(ClipboardData(text: message.text));
-                    Navigator.pop(context);
-                  },
                 ),
-              if (message.hasMedia)
-                ListTile(
-                  leading: const Icon(
-                    Icons.download_outlined,
-                    color: Colors.white70,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 8, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              for (final emoji in favorites)
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _react(message, emoji);
+                                  },
+                                  icon: Text(emoji, style: const TextStyle(fontSize: 20)),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Emoji seç',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await _pickReaction(message);
+                        },
+                        icon: const Icon(Icons.add_reaction_outlined, color: Colors.white54, size: 20),
+                      ),
+                    ],
                   ),
-                  title: const Text(
-                    'Indir',
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _downloadMedia(message);
-                  },
                 ),
-              ListTile(
-                leading: const Icon(Icons.reply, color: Colors.white70),
-                title: const Text(
-                  'Yanitla',
-                  style: TextStyle(color: Colors.white70),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _startReply(message);
-                },
-              ),
-              if (widget.chatId.isNotEmpty)
-                ListTile(
-                  leading: const Icon(
-                    Icons.info_outline,
-                    color: Colors.white70,
+                const Divider(height: 1, color: Color(0xFF2A2A2A)),
+                if (!message.hasMedia && !message.hasFile)
+                  item(
+                    icon: Icons.copy,
+                    label: 'Kopyala',
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: message.text));
+                      Navigator.pop(context);
+                    },
                   ),
-                  title: const Text(
-                    'Mesaj ayrıntıları',
-                    style: TextStyle(color: Colors.white70),
+                if (message.hasMedia || message.hasFile)
+                  item(
+                    icon: Icons.download_outlined,
+                    label: 'İndir',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _downloadMedia(message);
+                    },
                   ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showMessageDetails(message);
-                  },
-                ),
-              if (isMine &&
-                  widget.chatId.isNotEmpty &&
-                  !message.hasMedia &&
-                  !message.deletedForEveryone &&
-                  !message.isExpired())
-                ListTile(
-                  leading: const Icon(
-                    Icons.edit_outlined,
-                    color: Colors.white70,
-                  ),
-                  title: const Text(
-                    'Düzenle',
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _startEdit(message);
-                  },
-                ),
-              ListTile(
-                leading: const Icon(
-                  Icons.delete_outline,
-                  color: Colors.white70,
-                ),
-                title: const Text(
-                  'Benden sil',
-                  style: TextStyle(color: Colors.white70),
-                ),
-                onTap: () async {
-                  Navigator.pop(context);
-                  await _deleteMessage(message, forEveryone: false);
-                },
-              ),
-              if (!isMine && widget.chatId.isNotEmpty)
-                ListTile(
-                  leading: const Icon(
-                    Icons.flag_outlined,
-                    color: Color(0xFFFFCC80),
-                  ),
-                  title: const Text(
-                    'Mesajı bildir',
-                    style: TextStyle(color: Color(0xFFFFCC80)),
-                  ),
+                item(
+                  icon: Icons.reply,
+                  label: 'Yanıtla',
                   onTap: () {
                     Navigator.pop(context);
-                    _reportMessage(message);
+                    _startReply(message);
                   },
                 ),
-              if (!isMine &&
-                  chat?.isGroup == true &&
-                  chat!.isAdmin(_myUid ?? '') &&
-                  !chat.isAdmin(message.senderId))
-                ListTile(
-                  leading: const Icon(
-                    Icons.person_remove_outlined,
-                    color: Color(0xFFFF8A80),
+                if (widget.chatId.isNotEmpty)
+                  item(
+                    icon: Icons.info_outline,
+                    label: 'Ayrıntı',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _showMessageDetails(message);
+                    },
                   ),
-                  title: const Text(
-                    'Göndereni gruptan çıkar',
-                    style: TextStyle(color: Color(0xFFFF8A80)),
+                if (isMine &&
+                    widget.chatId.isNotEmpty &&
+                    !message.hasMedia &&
+                    !message.hasFile &&
+                    !message.deletedForEveryone &&
+                    !message.isExpired())
+                  item(
+                    icon: Icons.edit_outlined,
+                    label: 'Düzenle',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _startEdit(message);
+                    },
                   ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _removeMessageSender(chat, message);
-                  },
-                ),
-              if (isMine)
-                ListTile(
-                  leading: const Icon(
-                    Icons.delete_forever_outlined,
-                    color: Color(0xFFFF8A80),
-                  ),
-                  title: const Text(
-                    'Herkesten sil',
-                    style: TextStyle(color: Color(0xFFFF8A80)),
-                  ),
+                item(
+                  icon: Icons.delete_outline,
+                  label: 'Benden sil',
                   onTap: () async {
                     Navigator.pop(context);
-                    await _deleteMessage(message, forEveryone: true);
+                    await _deleteMessage(message, forEveryone: false);
                   },
                 ),
-            ],
+                if (!isMine && widget.chatId.isNotEmpty)
+                  item(
+                    icon: Icons.flag_outlined,
+                    label: 'Bildir',
+                    color: const Color(0xFFFFCC80),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _reportMessage(message);
+                    },
+                  ),
+                if (!isMine &&
+                    chat?.isGroup == true &&
+                    chat!.isAdmin(_myUid ?? '') &&
+                    !chat.isAdmin(message.senderId))
+                  item(
+                    icon: Icons.person_remove_outlined,
+                    label: 'Gruptan çıkar',
+                    color: const Color(0xFFFF8A80),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _removeMessageSender(chat, message);
+                    },
+                  ),
+                if (isMine)
+                  item(
+                    icon: Icons.delete_forever_outlined,
+                    label: 'Herkesten sil',
+                    color: const Color(0xFFFF8A80),
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _deleteMessage(message, forEveryone: true);
+                    },
+                  ),
+                const SizedBox(height: 6),
+              ],
+            ),
           ),
         );
       },
     );
   }
 
+  Future<void> _pickReaction(ChatMessage message) async {
+    const extras = ['🔥', '👏', '🎉', '💯', '👀', '🥰', '😡', '🤔'];
+    final settings = context.read<SettingsService>();
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF141414),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final emoji in {...settings.favoriteEmojis, ...extras})
+                  InkWell(
+                    onTap: () => Navigator.pop(context, emoji),
+                    onLongPress: () => settings.toggleFavoriteEmoji(emoji),
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (picked == null) return;
+    await _react(message, picked);
+  }
+
   void _openMedia(ChatMessage message) {
     final url = message.mediaUrl;
     if (url == null || url.isEmpty) return;
+    if (message.hasFile) {
+      _downloadMedia(message);
+      return;
+    }
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MediaViewerScreen(
@@ -1276,6 +1474,17 @@ class _ChatScreenState extends State<ChatScreen> {
     final url = message.mediaUrl;
     if (url == null || url.isEmpty) return;
     try {
+      if (message.hasFile) {
+        final file = await context.read<StorageService>().downloadToDocuments(
+          mediaUrl: url,
+          fileName: message.fileName ?? 'dosya',
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('İndirildi: ${file.path}')),
+        );
+        return;
+      }
       await context.read<StorageService>().downloadToGallery(
         mediaUrl: url,
         isVideo: message.type == MessageType.video,
@@ -1290,6 +1499,24 @@ class _ChatScreenState extends State<ChatScreen> {
         context,
       ).showSnackBar(const SnackBar(content: Text('Medya indirilemedi.')));
     }
+  }
+
+  PopupMenuItem<String> _menuItem(
+    String value,
+    String label, {
+    bool warn = false,
+  }) {
+    return PopupMenuItem(
+      value: value,
+      height: 38,
+      child: Text(
+        label,
+        style: TextStyle(
+          color: warn ? const Color(0xFFFFCC80) : Colors.white70,
+          fontSize: 13,
+        ),
+      ),
+    );
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -1344,18 +1571,7 @@ class _ChatScreenState extends State<ChatScreen> {
             final warning = _idleWarningProgress;
             return Scaffold(
               backgroundColor: IdleWarningLook.scaffold(warning),
-              floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-              floatingActionButton: _showJumpDown
-                  ? Padding(
-                      padding: const EdgeInsets.only(bottom: 72),
-                      child: FloatingActionButton.small(
-                        backgroundColor: const Color(0xFF2A2A2A),
-                        foregroundColor: Colors.white70,
-                        onPressed: _scrollToBottom,
-                        child: const Icon(Icons.arrow_downward),
-                      ),
-                    )
-                  : null,
+              floatingActionButton: null,
               appBar: AppBar(
                 backgroundColor: IdleWarningLook.appBar(warning),
                 foregroundColor: Colors.white70,
@@ -1394,7 +1610,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               ),
                             ),
                           ),
-                          TickingBuilder(
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            child: TickingBuilder(
                             interval: const Duration(seconds: 2),
                             builder: (_) {
                               final text = _presenceText(user, chat, settings);
@@ -1415,6 +1633,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ),
                               );
                             },
+                          ),
                           ),
                         ],
                       ),
@@ -1448,71 +1667,28 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   PopupMenuButton<String>(
                     color: const Color(0xFF161616),
-                    icon: const Icon(Icons.more_vert),
+                    icon: const Icon(Icons.more_vert, size: 22),
+                    padding: EdgeInsets.zero,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                    ),
                     onSelected: (value) => _onMenuSelected(value, pref, chat),
                     itemBuilder: (context) => [
-                      const PopupMenuItem(
-                        value: 'search',
-                        child: Text(
-                          'Bu sohbette ara',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'first',
-                        child: Text(
-                          'İlk mesaja git',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      ),
+                      _menuItem('search', 'Bu sohbette ara'),
+                      _menuItem('first', 'İlk mesaja git'),
+                      if (!isGroup) _menuItem('person', 'Kişi ayrıntısı'),
+                      if (isGroup) _menuItem('group', 'Grup ayrıntıları'),
+                      _menuItem('clear', 'Sohbeti temizle'),
                       if (!isGroup)
-                        const PopupMenuItem(
-                          value: 'person',
-                          child: Text(
-                            'Kişi ayrıntısı',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ),
-                      if (isGroup)
-                        const PopupMenuItem(
-                          value: 'group',
-                          child: Text(
-                            'Grup ayrıntıları',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ),
-                      const PopupMenuItem(
-                        value: 'clear',
-                        child: Text(
-                          'Sohbeti temizle',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      ),
-                      if (!isGroup)
-                        PopupMenuItem(
-                          value: 'block',
-                          child: Text(
-                            chat?.blockedBy.contains(currentUserId) == true
-                                ? 'Engeli kaldır'
-                                : 'Kişiyi engelle',
-                            style: const TextStyle(color: Colors.white70),
-                          ),
+                        _menuItem(
+                          'block',
+                          chat?.blockedBy.contains(currentUserId) == true
+                              ? 'Engeli kaldır'
+                              : 'Kişiyi engelle',
                         ),
                       if (!isGroup)
-                        const PopupMenuItem(
-                          value: 'report_user',
-                          child: Text(
-                            'Kişiyi bildir',
-                            style: TextStyle(color: Color(0xFFFFCC80)),
-                          ),
-                        ),
-                      const PopupMenuItem(
-                        value: 'calculator',
-                        child: Text(
-                          'Hesap makinesine dön',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      ),
+                        _menuItem('report_user', 'Kişiyi bildir', warn: true),
+                      _menuItem('calculator', 'Hesap makinesine dön'),
                     ],
                   ),
                 ],
@@ -1536,7 +1712,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                   Expanded(
-                    child: StreamBuilder<List<ChatMessage>>(
+                    child: Stack(
+                      children: [
+                        StreamBuilder<List<ChatMessage>>(
                       stream: _messagesStream,
                       builder: (context, snapshot) {
                         if (snapshot.connectionState ==
@@ -1628,7 +1806,23 @@ class _ChatScreenState extends State<ChatScreen> {
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             _scheduleMarkAsRead(messages);
                           });
-                          if (!_showJumpDown && _pendingJumpId == null) {
+                          if (!_didInitialAlign &&
+                              widget.initialMessageId == null) {
+                            _didInitialAlign = true;
+                            final unreadId = _firstUnreadIdOf(
+                              messages,
+                              currentUserId,
+                            );
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (!mounted) return;
+                              if (unreadId != null) {
+                                _showJumpDown = true;
+                                _jumpToMessage(unreadId, messages);
+                              } else {
+                                _scrollToBottom();
+                              }
+                            });
+                          } else if (!_showJumpDown && _pendingJumpId == null) {
                             _scrollToBottom();
                           }
                         }
@@ -1686,6 +1880,10 @@ class _ChatScreenState extends State<ChatScreen> {
                             final isRead =
                                 settings.readReceiptsEnabled &&
                                 message.readBy.any((id) => id != currentUserId);
+                            final firstUnreadId = _firstUnreadIdOf(
+                              messages,
+                              currentUserId,
+                            );
 
                             final messageKey = _messageKeys.putIfAbsent(
                               message.id,
@@ -1707,6 +1905,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                       ),
                                     ),
                                   ),
+                                if (message.id == firstUnreadId)
+                                  const UnreadDivider(),
                                 FutureBuilder<AppUser?>(
                                   future: isGroup && !isMine
                                       ? _userFor(message.senderId)
@@ -1715,23 +1915,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                     final pending = message.id.startsWith(
                                       'local-',
                                     );
-                                    return Dismissible(
-                                      key: ValueKey('swipe-${message.id}'),
-                                      direction: DismissDirection.startToEnd,
-                                      confirmDismiss: (_) async {
-                                        _startReply(message);
-                                        return false;
-                                      },
-                                      background: const Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Padding(
-                                          padding: EdgeInsets.only(left: 20),
-                                          child: Icon(
-                                            Icons.reply,
-                                            color: Colors.white38,
-                                          ),
-                                        ),
-                                      ),
+                                    return ReplySwipe(
+                                      onReply: () => _startReply(message),
                                       child: RepaintBoundary(
                                         child: MessageBubble(
                                           message: message,
@@ -1772,6 +1957,19 @@ class _ChatScreenState extends State<ChatScreen> {
                         );
                       },
                     ),
+                        if (_showJumpDown)
+                          Positioned(
+                            right: 10,
+                            bottom: 10,
+                            child: FloatingActionButton.small(
+                              backgroundColor: const Color(0xFF2A2A2A),
+                              foregroundColor: Colors.white70,
+                              onPressed: _scrollToBottom,
+                              child: const Icon(Icons.arrow_downward, size: 18),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                   TickingBuilder(
                     interval: const Duration(seconds: 2),
@@ -1782,22 +1980,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           chat != null &&
                           chat.isOtherTyping(widget.otherUserId);
                       if (!typing) return const SizedBox.shrink();
-                      return Container(
-                        width: double.infinity,
-                        color: const Color(0xFF12181E),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        child: const Text(
-                          'Yazıyor...',
-                          style: TextStyle(
-                            color: Color(0xFF90CAF9),
-                            fontSize: 13,
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      );
+                      return const TypingBubble();
                     },
                   ),
                   if (_editingMessage != null)
@@ -1837,7 +2020,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     Container(
                       width: double.infinity,
                       color: const Color(0xFF161616),
-                      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                      padding: const EdgeInsets.fromLTRB(12, 6, 0, 6),
                       child: Row(
                         children: [
                           const Icon(
@@ -1848,7 +2031,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              _replyTo!.text,
+                              _replyTo!.preview,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -1858,6 +2041,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                           ),
                           IconButton(
+                            visualDensity: VisualDensity.compact,
                             onPressed: () => setState(() => _replyTo = null),
                             icon: const Icon(
                               Icons.close,
@@ -1870,12 +2054,13 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   SafeArea(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 6, 4, 8),
+                      padding: const EdgeInsets.fromLTRB(4, 4, 2, 6),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           IconButton(
                             tooltip: _ttlLabel(),
+                            visualDensity: VisualDensity.compact,
                             color: _expireSeconds == null
                                 ? Colors.white38
                                 : const Color(0xFFFFCC80),
@@ -1884,14 +2069,25 @@ class _ChatScreenState extends State<ChatScreen> {
                               _expireSeconds == null
                                   ? Icons.timer_off_outlined
                                   : Icons.timer_outlined,
+                              size: 22,
                             ),
                           ),
-                          IconButton(
-                            tooltip: 'Fotoğraf / video',
-                            color: Colors.white70,
-                            onPressed: blocked ? null : _captureMedia,
-                            icon: const Icon(Icons.photo_camera_outlined),
-                          ),
+                          if (MediaQuery.viewInsetsOf(context).bottom < 80) ...[
+                            IconButton(
+                              tooltip: 'Fotoğraf / video',
+                              visualDensity: VisualDensity.compact,
+                              color: Colors.white70,
+                              onPressed: blocked ? null : _captureMedia,
+                              icon: const Icon(Icons.photo_camera_outlined, size: 22),
+                            ),
+                            IconButton(
+                              tooltip: 'Dosya',
+                              visualDensity: VisualDensity.compact,
+                              color: Colors.white70,
+                              onPressed: blocked ? null : _pickAndSendFile,
+                              icon: const Icon(Icons.attach_file, size: 22),
+                            ),
+                          ],
                           Expanded(
                             child: Focus(
                               onKeyEvent: _onKey,
@@ -1900,9 +2096,10 @@ class _ChatScreenState extends State<ChatScreen> {
                                 focusNode: _focusNode,
                                 enabled: !blocked,
                                 minLines: 1,
-                                maxLines: 5,
+                                maxLines: 8,
+                                keyboardType: TextInputType.multiline,
                                 textCapitalization: TextCapitalization.sentences,
-                                style: const TextStyle(color: Colors.white),
+                                style: const TextStyle(color: Colors.white, fontSize: 15),
                                 cursorColor: Colors.white54,
                                 decoration: InputDecoration(
                                   hintText: blocked
@@ -1915,8 +2112,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                   ),
                                   filled: true,
                                   fillColor: const Color(0xFF1A1A1A),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
                                   border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10),
+                                    borderRadius: BorderRadius.circular(16),
                                     borderSide: BorderSide.none,
                                   ),
                                   isDense: true,
@@ -1928,10 +2129,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                     fontSize: 11,
                                   ),
                                 ),
-                                textInputAction: TextInputAction.send,
-                                onSubmitted: blocked
-                                    ? null
-                                    : (_) => _sendText(),
+                                textInputAction: TextInputAction.newline,
                               ),
                             ),
                           ),

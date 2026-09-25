@@ -28,6 +28,8 @@ class SettingsService extends ChangeNotifier {
   static const _keyTheme = 'calculator_theme';
   static const _keyHistory = 'calculator_history';
   static const _keyIdleSeconds = 'chat_idle_seconds';
+  static const _keyFavoriteEmojis = 'chat_favorite_emojis';
+  static const defaultFavoriteEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
   static const allowedOperators = ['×', '+', '-', '÷'];
 
@@ -44,6 +46,7 @@ class SettingsService extends ChangeNotifier {
   CalculatorSkin _calculatorSkin = CalculatorSkin.samsung;
   int _chatIdleSeconds = 150;
   List<String> _calculatorHistory = [];
+  List<String> _favoriteEmojis = List<String>.from(defaultFavoriteEmojis);
   bool _ready = false;
 
   String get unlockLeft => _unlockLeft;
@@ -61,6 +64,7 @@ class SettingsService extends ChangeNotifier {
   int get chatIdleSeconds => _chatIdleSeconds;
   bool get showIdleCountdown => false;
   List<String> get calculatorHistory => List.unmodifiable(_calculatorHistory);
+  List<String> get favoriteEmojis => List.unmodifiable(_favoriteEmojis);
   bool get ready => _ready;
 
   Future<void> load() async {
@@ -89,6 +93,10 @@ class SettingsService extends ChangeNotifier {
     if (_chatIdleSeconds < 30) _chatIdleSeconds = 30;
     if (_chatIdleSeconds > 1800) _chatIdleSeconds = 1800;
     _calculatorHistory = prefs.getStringList(_keyHistory) ?? [];
+    final savedEmojis = prefs.getStringList(_keyFavoriteEmojis);
+    _favoriteEmojis = (savedEmojis == null || savedEmojis.isEmpty)
+        ? List<String>.from(defaultFavoriteEmojis)
+        : savedEmojis.take(8).toList();
     await _syncScreenProtection();
     _ready = true;
     notifyListeners();
@@ -190,6 +198,30 @@ class SettingsService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_keyHistory, _calculatorHistory);
     notifyListeners();
+  }
+
+  Future<void> setFavoriteEmojis(List<String> emojis) async {
+    _favoriteEmojis = emojis
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .take(8)
+        .toList();
+    if (_favoriteEmojis.isEmpty) {
+      _favoriteEmojis = List<String>.from(defaultFavoriteEmojis);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_keyFavoriteEmojis, _favoriteEmojis);
+    notifyListeners();
+  }
+
+  Future<void> toggleFavoriteEmoji(String emoji) async {
+    final next = [..._favoriteEmojis];
+    if (next.contains(emoji)) {
+      next.remove(emoji);
+    } else if (next.length < 8) {
+      next.add(emoji);
+    }
+    await setFavoriteEmojis(next);
   }
 
   Future<void> setLastSeenEnabled(bool value) async {
