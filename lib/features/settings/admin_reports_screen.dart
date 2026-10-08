@@ -24,7 +24,9 @@ class AdminReportsScreen extends StatelessWidget {
 }
 
 class AdminReportsList extends StatelessWidget {
-  const AdminReportsList({super.key});
+  const AdminReportsList({super.key, this.canPunish = true});
+
+  final bool canPunish;
 
   @override
   Widget build(BuildContext context) {
@@ -64,7 +66,10 @@ class AdminReportsList extends StatelessWidget {
           itemCount: groups.length,
           separatorBuilder: (_, __) => const Divider(color: Color(0xFF222222)),
           itemBuilder: (context, index) {
-            return _ReportedUserTile(group: groups[index]);
+            return _ReportedUserTile(
+              group: groups[index],
+              canPunish: canPunish,
+            );
           },
         );
       },
@@ -73,9 +78,10 @@ class AdminReportsList extends StatelessWidget {
 }
 
 class _ReportedUserTile extends StatelessWidget {
-  const _ReportedUserTile({required this.group});
+  const _ReportedUserTile({required this.group, required this.canPunish});
 
   final ReportedUserGroup group;
+  final bool canPunish;
 
   @override
   Widget build(BuildContext context) {
@@ -103,37 +109,58 @@ class _ReportedUserTile extends StatelessWidget {
           ),
         ),
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _userActionChip(context, '1 saat', const Duration(hours: 1)),
-              _userActionChip(context, '24 saat', const Duration(hours: 24)),
-              _userActionChip(context, '7 gun', const Duration(days: 7)),
-              _userActionChip(context, 'Kalıcı ban', null, permanent: true),
-              ActionChip(
-                label: const Text('Cezayi kaldır'),
-                onPressed: () => _clear(context),
-                backgroundColor: const Color(0xFF161616),
-                labelStyle: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 12,
-                ),
-              ),
-              if (group.reports.any((report) => report.isGroup))
+          if (canPunish)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _userActionChip(context, '1 saat', const Duration(hours: 1)),
+                _userActionChip(context, '24 saat', const Duration(hours: 24)),
+                _userActionChip(context, '7 gün', const Duration(days: 7)),
+                _userActionChip(context, 'Kalıcı ban', null, permanent: true),
                 ActionChip(
-                  label: const Text('Tüm gruplardan çıkar'),
-                  onPressed: () => _removeFromAllGroups(context),
-                  backgroundColor: const Color(0xFF3A1A1A),
+                  label: const Text('Cezayı kaldır'),
+                  onPressed: () => _clear(context),
+                  backgroundColor: const Color(0xFF161616),
                   labelStyle: const TextStyle(
-                    color: Color(0xFFFF8A80),
+                    color: Colors.white54,
                     fontSize: 12,
                   ),
                 ),
-            ],
-          ),
+                ActionChip(
+                  label: const Text('Fotoğrafı gizle'),
+                  onPressed: () => _hidePhoto(context, true),
+                  backgroundColor: const Color(0xFF161616),
+                  labelStyle: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                  ),
+                ),
+                ActionChip(
+                  label: const Text('Fotoğrafı göster'),
+                  onPressed: () => _hidePhoto(context, false),
+                  backgroundColor: const Color(0xFF161616),
+                  labelStyle: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 12,
+                  ),
+                ),
+                if (group.reports.any((report) => report.isGroup))
+                  ActionChip(
+                    label: const Text('Tüm gruplardan çıkar'),
+                    onPressed: () => _removeFromAllGroups(context),
+                    backgroundColor: const Color(0xFF3A1A1A),
+                    labelStyle: const TextStyle(
+                      color: Color(0xFFFF8A80),
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
           const SizedBox(height: 8),
-          ...group.reports.map((report) => _ReportTile(report: report)),
+          ...group.reports.map(
+            (report) => _ReportTile(report: report, canPunish: canPunish),
+          ),
         ],
       ),
     );
@@ -198,6 +225,29 @@ class _ReportedUserTile extends StatelessWidget {
     }
   }
 
+  Future<void> _hidePhoto(BuildContext context, bool hidden) async {
+    try {
+      await context.read<ModerationService>().setProfilePhotoHidden(
+            userId: group.userId,
+            email: group.email,
+            hidden: hidden,
+          );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(hidden ? 'Fotoğraf gizlendi.' : 'Fotoğraf gösterildi.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
   Future<void> _clear(BuildContext context) async {
     final moderation = context.read<ModerationService>();
     try {
@@ -237,9 +287,10 @@ class _ReportedUserTile extends StatelessWidget {
 }
 
 class _ReportTile extends StatelessWidget {
-  const _ReportTile({required this.report});
+  const _ReportTile({required this.report, required this.canPunish});
 
   final MessageReport report;
+  final bool canPunish;
 
   @override
   Widget build(BuildContext context) {
@@ -305,6 +356,7 @@ class _ReportTile extends StatelessWidget {
               ),
             ),
           ],
+          if (canPunish) ...[
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -331,6 +383,7 @@ class _ReportTile extends StatelessWidget {
                 ),
             ],
           ),
+          ],
         ],
       ),
     );

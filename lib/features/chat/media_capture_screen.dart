@@ -46,6 +46,9 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
   Duration _recordAccumulated = Duration.zero;
   Timer? _recordTimer;
   int _previewEpoch = 0;
+  int _timerSeconds = 0;
+  int _countdownLeft = 0;
+  Timer? _captureDelay;
   final List<File> _videoSegments = [];
   static const _concatChannel = MethodChannel(
     'com.hesapmakinesi.hesap_makinesi/video_concat',
@@ -208,6 +211,38 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
     }
   }
 
+  void _cycleTimer() {
+    const options = [0, 3, 5, 10];
+    final index = options.indexOf(_timerSeconds);
+    setState(() => _timerSeconds = options[(index + 1) % options.length]);
+  }
+
+  void _onShutter() {
+    if (_videoMode) {
+      _toggleRecord();
+      return;
+    }
+    if (_timerSeconds <= 0) {
+      unawaited(_takePhoto());
+      return;
+    }
+    _captureDelay?.cancel();
+    setState(() => _countdownLeft = _timerSeconds);
+    _captureDelay = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_countdownLeft <= 1) {
+        timer.cancel();
+        setState(() => _countdownLeft = 0);
+        unawaited(_takePhoto());
+        return;
+      }
+      setState(() => _countdownLeft -= 1);
+    });
+  }
+
   Future<void> _toggleMediaMode() async {
     if (_recording || _switchingCamera || _cameras.isEmpty) return;
     setState(() {
@@ -221,6 +256,7 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
   @override
   void dispose() {
     _recordTimer?.cancel();
+    _captureDelay?.cancel();
     _controller?.removeListener(_onCameraChanged);
     _controller?.dispose();
     _video?.removeListener(_onPreviewVideoChanged);
@@ -512,17 +548,7 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
               ? _formatDuration(_recordElapsed)
               : (_videoMode ? 'Video' : 'Fotoğraf'),
         ),
-        actions: [
-          TextButton(
-            onPressed: (_recording || _switchingCamera)
-                ? null
-                : _toggleMediaMode,
-            child: Text(
-              _videoMode ? 'Fotoğrafa gec' : 'Videoya gec',
-              style: const TextStyle(color: Colors.white70),
-            ),
-          ),
-        ],
+        actions: const [],
       ),
       body: _preview != null ? _buildPreview() : _buildCamera(),
     );
@@ -575,10 +601,21 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
                   ),
                 ),
               ),
+            if (_countdownLeft > 0)
+              Center(
+                child: Text(
+                  '$_countdownLeft',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 72,
+                    fontWeight: FontWeight.w200,
+                  ),
+                ),
+              ),
             Align(
               alignment: Alignment.bottomCenter,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 30),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -597,10 +634,26 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
                             color: Colors.white70,
                           ),
                         ),
-                        GestureDetector(
-                          onTap: _switchingCamera
+                        IconButton(
+                          tooltip: _timerSeconds == 0
+                              ? 'Zamanlayıcı'
+                              : '$_timerSeconds sn',
+                          onPressed: (_recording || _countdownLeft > 0)
                               ? null
-                              : (_videoMode ? _toggleRecord : _takePhoto),
+                              : _cycleTimer,
+                          icon: Text(
+                            _timerSeconds == 0 ? 'Off' : '${_timerSeconds}s',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: _switchingCamera || _countdownLeft > 0
+                              ? null
+                              : _onShutter,
                           child: Container(
                             width: 72,
                             height: 72,
@@ -614,6 +667,18 @@ class _MediaCaptureScreenState extends State<MediaCaptureScreen> {
                             child: _recording
                                 ? const Icon(Icons.stop, color: Colors.white)
                                 : null,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: _videoMode ? 'Fotoğraf' : 'Video',
+                          onPressed: (_recording || _switchingCamera)
+                              ? null
+                              : _toggleMediaMode,
+                          icon: Icon(
+                            _videoMode
+                                ? Icons.photo_camera_outlined
+                                : Icons.videocam_outlined,
+                            color: Colors.white70,
                           ),
                         ),
                         IconButton(

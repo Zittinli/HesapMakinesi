@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/widgets.dart';
 
+import '../core/chat_format.dart';
 import 'settings_service.dart';
 
 class PresenceService with WidgetsBindingObserver {
@@ -18,17 +21,21 @@ class PresenceService with WidgetsBindingObserver {
   final SettingsService? _settings;
 
   bool _wantOnline = false;
+  Timer? _heartbeat;
 
   void start() {
     WidgetsBinding.instance.addObserver(this);
     _settings?.addListener(_syncPresence);
     _wantOnline = true;
     _syncPresence();
+    _armHeartbeat();
   }
 
   void stop() {
     WidgetsBinding.instance.removeObserver(this);
     _settings?.removeListener(_syncPresence);
+    _heartbeat?.cancel();
+    _heartbeat = null;
     _wantOnline = false;
     _syncPresence();
   }
@@ -39,13 +46,25 @@ class PresenceService with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         _wantOnline = true;
         _syncPresence();
+        _armHeartbeat();
       case AppLifecycleState.inactive:
+        if (_wantOnline) _writePresence(true);
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
+        _heartbeat?.cancel();
+        _heartbeat = null;
         _wantOnline = false;
         _syncPresence();
     }
+  }
+
+  void _armHeartbeat() {
+    _heartbeat?.cancel();
+    if (!_wantOnline) return;
+    _heartbeat = Timer.periodic(ChatFormat.presenceHeartbeat, (_) {
+      if (_wantOnline) _writePresence(true);
+    });
   }
 
   void _syncPresence() {
@@ -64,8 +83,6 @@ class PresenceService with WidgetsBindingObserver {
         'shareLastSeen': share,
       });
     } on FirebaseException catch (error) {
-      // Oturum kapanirken ya da kullanici belgesi henuz yokken yazma
-      // reddedilebilir; durum bilgisi kritik degil, uygulamayi dusurmemeli.
       debugPrint('Presence yazılamadı: ${error.code}');
     }
   }

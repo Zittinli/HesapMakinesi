@@ -1,6 +1,33 @@
 import 'package:intl/intl.dart';
 
 class ChatFormat {
+  static const presenceHeartbeat = Duration(seconds: 20);
+  static const presenceFreshFor = Duration(seconds: 120);
+  static const turkeyOffset = Duration(hours: 3);
+
+  /// Türkiye duvar saati. Cihaz Avrupa yaz saatinde (UTC+2) olsa da UTC+3 basar.
+  static DateTime turkeyClock(DateTime time) {
+    final shifted = time.toUtc().add(turkeyOffset);
+    return DateTime(
+      shifted.year,
+      shifted.month,
+      shifted.day,
+      shifted.hour,
+      shifted.minute,
+      shifted.second,
+      shifted.millisecond,
+    );
+  }
+
+  static bool isFreshOnline({
+    required bool isOnline,
+    DateTime? lastSeen,
+    DateTime? now,
+  }) {
+    if (!isOnline || lastSeen == null) return false;
+    return (now ?? DateTime.now()).difference(lastSeen) <= presenceFreshFor;
+  }
+
   static String initials(String name) {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return '?';
@@ -14,8 +41,8 @@ class ChatFormat {
 
   static String listTime(DateTime? time) {
     if (time == null) return '';
-    final local = time.toLocal();
-    final now = DateTime.now();
+    final local = turkeyClock(time);
+    final now = turkeyClock(DateTime.now());
     final today = DateTime(now.year, now.month, now.day);
     final day = DateTime(local.year, local.month, local.day);
     final diff = today.difference(day).inDays;
@@ -28,8 +55,8 @@ class ChatFormat {
   }
 
   static String dayLabel(DateTime time) {
-    final local = time.toLocal();
-    final now = DateTime.now();
+    final local = turkeyClock(time);
+    final now = turkeyClock(DateTime.now());
     final today = DateTime(now.year, now.month, now.day);
     final day = DateTime(local.year, local.month, local.day);
     final diff = today.difference(day).inDays;
@@ -40,12 +67,12 @@ class ChatFormat {
 
   static String messageTime(DateTime? time) {
     if (time == null) return '';
-    return DateFormat('HH:mm').format(time.toLocal());
+    return DateFormat('HH:mm').format(turkeyClock(time));
   }
 
   static String eventDateTime(DateTime? time) {
     if (time == null) return '';
-    return DateFormat('dd.MM.yyyy HH:mm').format(time.toLocal());
+    return DateFormat('dd.MM.yyyy HH:mm').format(turkeyClock(time));
   }
 
   static String lastSeenLabel(
@@ -53,11 +80,13 @@ class ChatFormat {
     DateTime? now,
     bool isOnline = false,
   }) {
-    if (isOnline) return 'Aktif';
+    if (isFreshOnline(isOnline: isOnline, lastSeen: time, now: now)) {
+      return 'Aktif';
+    }
     if (time == null) return '';
-    final local = time.toLocal();
-    final current = now ?? DateTime.now();
-    final minutes = current.difference(local).inMinutes;
+    final local = turkeyClock(time);
+    final current = turkeyClock(now ?? DateTime.now());
+    final minutes = (now ?? DateTime.now()).difference(time).inMinutes;
     if (minutes < 2) return 'Son aktif: az önce';
     final today = DateTime(current.year, current.month, current.day);
     final day = DateTime(local.year, local.month, local.day);
@@ -73,6 +102,10 @@ class ChatFormat {
 
   static bool isSameDay(DateTime? a, DateTime? b) {
     if (a == null || b == null) return false;
-    return a.year == b.year && a.month == b.month && a.day == b.day;
+    final left = turkeyClock(a);
+    final right = turkeyClock(b);
+    return left.year == right.year &&
+        left.month == right.month &&
+        left.day == right.day;
   }
 }

@@ -5,7 +5,9 @@ import 'package:provider/provider.dart';
 
 import '../../core/admin_config.dart';
 import '../../core/chat_format.dart';
+import '../../core/staff_perms.dart';
 import '../../core/chat_idle_listener.dart';
+import '../../core/ticking_builder.dart';
 import '../../models/chat_model.dart';
 import '../../models/chat_pref_model.dart';
 import '../../models/message_model.dart';
@@ -17,8 +19,10 @@ import '../../services/nudge_service.dart';
 import '../../services/settings_service.dart';
 import '../chat/chat_screen.dart';
 import '../chat/pending_chats_screen.dart';
+import 'typing_bubble.dart';
 import '../settings/admin_home_screen.dart';
 import '../settings/settings_screen.dart';
+import '../../widgets/profile_avatar.dart';
 
 class SecretHubScreen extends StatefulWidget {
   const SecretHubScreen({super.key, required this.onExitToCalculator});
@@ -699,26 +703,34 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
           onPressed: widget.onExitToCalculator,
         ),
         actions: [
-          if (AdminConfig.isAdminEmail(myEmail))
-            IconButton(
-              tooltip: 'Yönetim',
-              icon: const Icon(Icons.shield_outlined, size: 22),
-              color: const Color(0xFFFFCC80),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => AdminHomeScreen(
-                      onExitToCalculator: widget.onExitToCalculator,
+          StreamBuilder<AppUser?>(
+            stream: authService.watchUser(currentUserId),
+            builder: (context, snapshot) {
+              final me = snapshot.data;
+              final showShield = AdminConfig.isAdminEmail(myEmail) ||
+                  StaffPerm.normalize(me?.staffPerms ?? const []).isNotEmpty;
+              if (!showShield) return const SizedBox.shrink();
+              return IconButton(
+                tooltip: 'Yönetim',
+                icon: const Icon(Icons.shield_outlined, size: 22),
+                color: const Color(0xFFFFCC80),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => AdminHomeScreen(
+                        onExitToCalculator: widget.onExitToCalculator,
+                      ),
                     ),
-                  ),
-                );
-              },
-            ),
-          TextButton.icon(
+                  );
+                },
+              );
+            },
+          ),
+          IconButton(
+            tooltip: 'Ayarlar',
+            icon: const Icon(Icons.settings_outlined, size: 22),
             onPressed: () {
-              Navigator.of(
-                context,
-              ).push(
+              Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => SettingsScreen(
                     onExitToCalculator: widget.onExitToCalculator,
@@ -726,15 +738,6 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                 ),
               );
             },
-            icon: const Icon(
-              Icons.settings_outlined,
-              size: 18,
-              color: Colors.white70,
-            ),
-            label: const Text(
-              'Ayarlar',
-              style: TextStyle(color: Colors.white70),
-            ),
           ),
           IconButton(
             tooltip: 'Hesap makinesine dön',
@@ -988,6 +991,7 @@ class _ChatRecordsList extends StatefulWidget {
 class _ChatRecordsListState extends State<_ChatRecordsList> {
   Stream<List<AppUser?>>? _usersStream;
   String _idsKey = '';
+  final Map<String, AppUser> _usersById = {};
 
   @override
   void didChangeDependencies() {
@@ -1002,12 +1006,14 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
   }
 
   List<String> get _otherIds {
-    return widget.chats
+    final ids = widget.chats
         .where((chat) => !chat.isGroup)
         .map((c) => c.otherParticipantId(widget.currentUserId))
         .where((id) => id.isNotEmpty)
         .toSet()
         .toList();
+    ids.sort();
+    return ids;
   }
 
   void _ensureUserStream() {
@@ -1020,6 +1026,12 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
         : context.read<AuthService>().watchUsers(ids);
   }
 
+  void _mergeUsers(List<AppUser?> list) {
+    for (final user in list) {
+      if (user != null) _usersById[user.id] = user;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final otherIds = _otherIds;
@@ -1028,11 +1040,10 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
     return StreamBuilder<List<AppUser?>>(
       stream: _usersStream,
       builder: (context, snapshot) {
-        final users = <String, AppUser?>{};
-        final list = snapshot.data ?? [];
-        for (var i = 0; i < otherIds.length && i < list.length; i++) {
-          users[otherIds[i]] = list[i];
-        }
+        _mergeUsers(snapshot.data ?? const []);
+        final users = <String, AppUser?>{
+          for (final id in otherIds) id: _usersById[id],
+        };
 
         final visible = widget.filter(
           widget.chats,
@@ -1051,117 +1062,132 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
           );
         }
 
-        return ListView.separated(
-          itemCount: visible.length,
-          separatorBuilder: (_, __) =>
-              const Divider(height: 1, color: Color(0xFF1C1C1C)),
-          itemBuilder: (context, index) {
-            final chat = visible[index];
-            final otherUserId = chat.otherParticipantId(widget.currentUserId);
-            final otherUser = users[otherUserId];
-            final title = chat.isGroup
-                ? (chat.groupName.isEmpty ? 'Adsız grup' : chat.groupName)
-                : (otherUser?.visibleName ?? 'Kullanıcı');
-            final pref = widget.prefs[chat.id] ?? ChatPref.empty(chat.id);
-            final unread = chat.unreadFor(widget.currentUserId);
-            final nudged = context.watch<NudgeService>().hasPending(chat.id);
+        return TickingBuilder(
+          interval: const Duration(seconds: 1),
+          builder: (_) {
+            return ListView.separated(
+              key: const PageStorageKey('hub-chat-records'),
+              itemCount: visible.length,
+              separatorBuilder: (_, __) =>
+                  const Divider(height: 1, color: Color(0xFF1C1C1C)),
+              itemBuilder: (context, index) {
+                final chat = visible[index];
+                final otherUserId = chat.otherParticipantId(
+                  widget.currentUserId,
+                );
+                final otherUser = users[otherUserId];
+                final title = chat.isGroup
+                    ? (chat.groupName.isEmpty ? 'Adsız grup' : chat.groupName)
+                    : (otherUser?.visibleName ?? 'Kullanıcı');
+                final pref = widget.prefs[chat.id] ?? ChatPref.empty(chat.id);
+                final unread = chat.unreadFor(widget.currentUserId);
+                final nudged = context.watch<NudgeService>().hasPending(
+                  chat.id,
+                );
+                final nowTyping =
+                    !chat.isGroup &&
+                    typingEnabled &&
+                    chat.isOtherTyping(otherUserId);
 
-            return Dismissible(
-              key: ValueKey(chat.id),
-              direction: DismissDirection.endToStart,
-              background: const ColoredBox(
-                color: Color(0xFF3A1A1A),
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: Padding(
-                    padding: EdgeInsets.only(right: 20),
-                    child: Icon(
-                      Icons.visibility_off_outlined,
-                      color: Colors.white54,
-                    ),
-                  ),
-                ),
-              ),
-              confirmDismiss: (_) async {
-                await widget.onHide(chat);
-                return false;
-              },
-              child: InkWell(
-                onTap: () => widget.onOpen(chat, title),
-                onLongPress: () => widget.onMenu(chat, pref),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  child: Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 20,
-                        backgroundColor: const Color(0xFF2A2A2A),
-                        child: Text(
-                          ChatFormat.initials(title),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                          ),
+                return Dismissible(
+                  key: ValueKey(chat.id),
+                  direction: DismissDirection.endToStart,
+                  background: const ColoredBox(
+                    color: Color(0xFF3A1A1A),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Padding(
+                        padding: EdgeInsets.only(right: 20),
+                        child: Icon(
+                          Icons.visibility_off_outlined,
+                          color: Colors.white54,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+                    ),
+                  ),
+                  confirmDismiss: (_) async {
+                    await widget.onHide(chat);
+                    return false;
+                  },
+                  child: InkWell(
+                    onTap: () => widget.onOpen(chat, title),
+                    onLongPress: () => widget.onMenu(chat, pref),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              ProfileAvatar(
+                                name: title,
+                                photoUrl: chat.isGroup
+                                    ? chat.visibleGroupPhotoUrl
+                                    : otherUser?.visiblePhotoUrl,
+                                hidden: chat.isGroup
+                                    ? false
+                                    : (otherUser?.photoHidden ?? false),
+                                radius: 20,
+                              ),
+                              if (nowTyping)
+                                const Positioned(
+                                  right: -1,
+                                  bottom: -1,
+                                  child: TypingDot(),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                Row(
+                                  children: [
+                                    Text(
+                                      chat.isGroup ? 'Grup' : 'Kayıt',
+                                      style: const TextStyle(
+                                        color: Colors.white38,
+                                        fontSize: 11,
+                                        letterSpacing: 0.4,
+                                      ),
+                                    ),
+                                    if (pref.pinned) ...[
+                                      const SizedBox(width: 6),
+                                      const Icon(
+                                        Icons.push_pin,
+                                        size: 12,
+                                        color: Colors.white38,
+                                      ),
+                                    ],
+                                    if (pref.muted) ...[
+                                      const SizedBox(width: 4),
+                                      const Icon(
+                                        Icons.volume_off_outlined,
+                                        size: 12,
+                                        color: Colors.white38,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
                                 Text(
-                                  chat.isGroup ? 'Grup' : 'Kayıt',
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    color: Colors.white38,
-                                    fontSize: 11,
-                                    letterSpacing: 0.4,
+                                    color: Colors.white.withValues(alpha: 0.86),
+                                    fontSize: 15,
+                                    fontWeight: unread > 0
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
                                   ),
                                 ),
-                                if (pref.pinned) ...[
-                                  const SizedBox(width: 6),
-                                  const Icon(
-                                    Icons.push_pin,
-                                    size: 12,
-                                    color: Colors.white38,
-                                  ),
-                                ],
-                                if (pref.muted) ...[
-                                  const SizedBox(width: 4),
-                                  const Icon(
-                                    Icons.volume_off_outlined,
-                                    size: 12,
-                                    color: Colors.white38,
-                                  ),
-                                ],
-                              ],
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.86),
-                                fontSize: 15,
-                                fontWeight: unread > 0
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Builder(
-                              builder: (_) {
-                                final nowTyping =
-                                    !chat.isGroup &&
-                                    typingEnabled &&
-                                    chat.isOtherTyping(otherUserId);
-                                return Text(
+                                const SizedBox(height: 2),
+                                Text(
                                   nowTyping
                                       ? 'Yazıyor...'
                                       : (chat.lastMessage.isEmpty
@@ -1171,67 +1197,69 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                     color: nowTyping
-                                        ? Colors.white54
+                                        ? const Color(0xFF90CAF9)
                                         : Colors.white38,
                                     fontSize: 13,
                                     fontStyle: nowTyping
                                         ? FontStyle.italic
                                         : FontStyle.normal,
                                   ),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          if (nudged) ...[
-                            const Icon(
-                              Icons.vibration,
-                              size: 16,
-                              color: Colors.white70,
-                            ),
-                            const SizedBox(height: 4),
-                          ],
-                          Text(
-                            ChatFormat.listTime(chat.lastMessageAt),
-                            style: const TextStyle(
-                              color: Colors.white30,
-                              fontSize: 12,
+                                ),
+                              ],
                             ),
                           ),
-                          if (unread > 0) ...[
-                            const SizedBox(height: 6),
-                            Container(
-                              constraints: const BoxConstraints(minWidth: 20),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF3A3A3A),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Text(
-                                unread > 99 ? '99+' : '$unread',
-                                textAlign: TextAlign.center,
+                          const SizedBox(width: 10),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              if (nudged) ...[
+                                const Icon(
+                                  Icons.vibration,
+                                  size: 16,
+                                  color: Colors.white70,
+                                ),
+                                const SizedBox(height: 4),
+                              ],
+                              Text(
+                                ChatFormat.listTime(chat.lastMessageAt),
                                 style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white30,
+                                  fontSize: 12,
                                 ),
                               ),
-                            ),
-                          ],
+                              if (unread > 0) ...[
+                                const SizedBox(height: 6),
+                                Container(
+                                  constraints: const BoxConstraints(
+                                    minWidth: 20,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF3A3A3A),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    unread > 99 ? '99+' : '$unread',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             );
           },
         );

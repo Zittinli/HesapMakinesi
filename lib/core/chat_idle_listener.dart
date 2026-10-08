@@ -72,7 +72,12 @@ class _ChatIdleListenerState extends State<ChatIdleListener> {
       return;
     }
     if (_pausedForOverlay) {
-      _bump();
+      _deadline = DateTime.now().add(
+        Duration(seconds: context.read<SettingsService>().chatIdleSeconds),
+      );
+      _pausedForOverlay = false;
+      _fastTicks = false;
+      _armTimer();
       return;
     }
     final deadline = _deadline;

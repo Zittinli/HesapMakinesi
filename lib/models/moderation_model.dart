@@ -6,12 +6,14 @@ class ModerationStatus {
     this.timeoutUntil,
     this.reason = '',
     this.email = '',
+    this.hideProfilePhoto = false,
   });
 
   final bool bannedPermanently;
   final DateTime? timeoutUntil;
   final String reason;
   final String email;
+  final bool hideProfilePhoto;
 
   static const empty = ModerationStatus();
 
@@ -41,6 +43,7 @@ class ModerationStatus {
       timeoutUntil: (data['timeoutUntil'] as Timestamp?)?.toDate(),
       reason: data['reason'] as String? ?? '',
       email: data['email'] as String? ?? '',
+      hideProfilePhoto: data['hideProfilePhoto'] as bool? ?? false,
     );
   }
 

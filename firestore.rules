@@ -11,6 +11,7 @@ rules_version = '2';
 //   - lastSeen: timestamp | null
 //   - lastLoginAt: timestamp | null
 //   - createdAt: timestamp | null (immutable)
+//   - quickEmojis: list<string> (optional, 1-8, each 1-64 chars)
 //
 // Collection: users/{userId}/chatPrefs/{chatId}
 //   - pinned, muted, hidden: bool
@@ -22,6 +23,8 @@ rules_version = '2';
 //   - updatedAt: timestamp
 //
 // Collection: users/{userId}/incomingNudges/{nudgeId}
+// Collection: users/{userId}/forceLockAllow/{peerId}
+// Collection: users/{userId}/incomingForceLocks/{lockId}
 //   - from, chatId: string
 //   - createdAt: timestamp
 //
@@ -88,6 +91,7 @@ rules_version = '2';
 //   - expireSeconds: number | null (10 | 60)
 //   - deletedFor: list<string>
 //   - deletedForEveryone: bool
+//   - expiredDeleted: bool (TTL süresi dolunca, belge silinmez)
 //
 // ===============================================================
 
@@ -114,6 +118,18 @@ service cloud.firestore {
           || request.auth.token.admin == true
           || authEmailLower() == 'zttnlnkc@gmail.com'
         );
+    }
+
+    function myStaffPerms() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.staffPerms is list
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.staffPerms
+        : [];
+    }
+
+    function hasStaffPerm(perm) {
+      return isAdmin() || myStaffPerms().hasAny([perm]);
     }
 
     function recordRestricts(data) {
@@ -180,18 +196,19 @@ service cloud.firestore {
           'reason',
           'email',
           'updatedAt',
-          'updatedBy'
+          'updatedBy',
+          'hideProfilePhoto'
         ])
-        && data.bannedPermanently is bool
-        && (data.timeoutUntil == null || data.timeoutUntil is timestamp)
-        && data.reason is string
-        && data.reason.size() <= 400
+        && (!('bannedPermanently' in data) || data.bannedPermanently is bool)
+        && (!('timeoutUntil' in data) || data.timeoutUntil == null || data.timeoutUntil is timestamp)
+        && (!('reason' in data) || (data.reason is string && data.reason.size() <= 400))
         && data.email is string
         && data.email.size() <= 320
         && (data.updatedAt == null || data.updatedAt is timestamp)
         && data.updatedBy is string
         && data.updatedBy.size() <= 128
-        && data.updatedBy == request.auth.uid;
+        && data.updatedBy == request.auth.uid
+        && (!('hideProfilePhoto' in data) || data.hideProfilePhoto is bool);
     }
 
     function isValidReportCreate(data) {
@@ -233,7 +250,7 @@ service cloud.firestore {
         && data.messageId.size() <= 128
         && data.messageText is string
         && data.messageText.size() <= 4000
-        && data.reason in ['spam', 'abuse', 'hate', 'sexual', 'illegal', 'other']
+        && data.reason in ['spam', 'abuse', 'hate', 'sexual', 'illegal', 'profilePhoto', 'other']
         && data.status == 'pending'
         && data.action is string
         && data.action.size() <= 80
@@ -303,7 +320,11 @@ service cloud.firestore {
           'acceptedTermsAt',
           'emailOtpVerified',
           'lastLoginAt',
-          'displayNameChangedAt'
+          'displayNameChangedAt',
+          'quickEmojis',
+          'photoUrl',
+          'photoHidden',
+          'staffPerms'
         ])
         && isValidEmail(data.email)
         && data.displayName is string
@@ -316,7 +337,37 @@ service cloud.firestore {
         && (!('acceptedTermsAt' in data) || data.acceptedTermsAt == null || data.acceptedTermsAt is timestamp)
         && (!('emailOtpVerified' in data) || data.emailOtpVerified is bool)
         && (!('lastLoginAt' in data) || data.lastLoginAt == null || data.lastLoginAt is timestamp)
-        && (!('displayNameChangedAt' in data) || data.displayNameChangedAt == null || data.displayNameChangedAt is timestamp);
+        && (!('displayNameChangedAt' in data) || data.displayNameChangedAt == null || data.displayNameChangedAt is timestamp)
+        && (!('quickEmojis' in data) || isValidQuickEmojis(data.quickEmojis))
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 8000))
+        && (!('photoHidden' in data) || data.photoHidden is bool)
+        && (!('staffPerms' in data) || (
+          data.staffPerms is list
+          && data.staffPerms.size() <= 20
+        ));
+    }
+
+    function validQuickEmojiAt(list, index) {
+      return list.size() <= index
+        || (
+          list[index] is string
+          && list[index].size() > 0
+          && list[index].size() <= 64
+        );
+    }
+
+    function isValidQuickEmojis(value) {
+      return value is list
+        && value.size() >= 1
+        && value.size() <= 8
+        && validQuickEmojiAt(value, 0)
+        && validQuickEmojiAt(value, 1)
+        && validQuickEmojiAt(value, 2)
+        && validQuickEmojiAt(value, 3)
+        && validQuickEmojiAt(value, 4)
+        && validQuickEmojiAt(value, 5)
+        && validQuickEmojiAt(value, 6)
+        && validQuickEmojiAt(value, 7);
     }
 
     function isValidAuthEvent(data) {
@@ -386,7 +437,7 @@ service cloud.firestore {
         && data.chatId is string
         && data.chatId.size() > 0
         && data.chatId.size() <= 128
-        && data.updatedAt == request.time
+        && data.updatedAt is timestamp
         && isDirectChatWith(data.chatId, peerId);
     }
 
@@ -409,6 +460,25 @@ service cloud.firestore {
         && isDirectChatWith(data.chatId, toUid);
     }
 
+    function peerAllowsForceLock(toUid) {
+      let allowPath = /databases/$(database)/documents/users/$(toUid)/forceLockAllow/$(request.auth.uid);
+      return exists(allowPath) && get(allowPath).data.allow == true;
+    }
+
+    function isValidIncomingForceLock(toUid, data) {
+      return data.keys().hasOnly(['from', 'chatId', 'createdAt'])
+        && data.from == request.auth.uid
+        && data.from is string
+        && data.from.size() > 0
+        && data.from.size() <= 128
+        && data.chatId is string
+        && data.chatId.size() > 0
+        && data.chatId.size() <= 128
+        && data.createdAt == request.time
+        && peerAllowsForceLock(toUid)
+        && isDirectChatWith(data.chatId, toUid);
+    }
+
     function isValidChat(data) {
       return data.keys().hasOnly([
           'participants',
@@ -422,7 +492,9 @@ service cloud.firestore {
           'groupName',
           'createdBy',
           'adminIds',
-          'createdAt'
+          'createdAt',
+          'groupPhotoUrl',
+          'groupTimeoutUntil'
         ])
         && isValidUidList(data.participants, 20)
         && data.participants.size() >= 1
@@ -457,6 +529,8 @@ service cloud.firestore {
               )
             )
             && (!('createdAt' in data) || data.createdAt is timestamp)
+            && (!('groupPhotoUrl' in data) || (data.groupPhotoUrl is string && data.groupPhotoUrl.size() <= 8000))
+            && (!('groupTimeoutUntil' in data) || data.groupTimeoutUntil == null || data.groupTimeoutUntil is timestamp)
           )
         )
         && data.lastMessage is string
@@ -486,6 +560,25 @@ service cloud.firestore {
             isValidUidList(data.blockedBy, 2)
             && data.blockedBy.toSet().hasOnly(data.participants)
             && (!isGroupChat(data) || data.blockedBy.size() == 0)
+          )
+        );
+    }
+
+    function isValidChatPreviewUpdate() {
+      return request.resource.data.lastMessage is string
+        && request.resource.data.lastMessage.size() <= 2000
+        && request.resource.data.lastMessageSenderId is string
+        && request.resource.data.lastMessageSenderId.size() <= 128
+        && (
+          request.resource.data.lastMessageAt == null
+          || request.resource.data.lastMessageAt is timestamp
+        )
+        && (
+          !('unreadCounts' in request.resource.data)
+          || (
+            request.resource.data.unreadCounts is map
+            && request.resource.data.unreadCounts.keys()
+              .hasOnly(request.resource.data.participants)
           )
         );
     }
@@ -528,8 +621,10 @@ service cloud.firestore {
           'expireSeconds',
           'deletedFor',
           'deletedForEveryone',
+          'expiredDeleted',
           'editedAt',
-          'reactions'
+          'reactions',
+          'downloadedBy'
         ])
         && data.senderId is string
         && data.senderId.size() > 0
@@ -537,11 +632,12 @@ service cloud.firestore {
         && data.text is string
         && data.text.size() <= 4000
         && data.type in ['text', 'image', 'video', 'file']
-        && (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 2000))
+        && (!('mediaUrl' in data) || data.mediaUrl == null || (data.mediaUrl is string && data.mediaUrl.size() <= 8000))
         && (!('fileName' in data) || data.fileName == null || (data.fileName is string && data.fileName.size() <= 200))
-        && (!('fileSize' in data) || data.fileSize == null || (data.fileSize is number && data.fileSize >= 0 && data.fileSize <= 78643200))
+        && (!('fileSize' in data) || data.fileSize == null || ((data.fileSize is int || data.fileSize is float) && data.fileSize >= 0 && data.fileSize <= 78643200))
         && (!('fileMime' in data) || data.fileMime == null || (data.fileMime is string && data.fileMime.size() <= 120))
         && (!('reactions' in data) || (data.reactions is map && data.reactions.size() <= 80))
+        && (!('downloadedBy' in data) || isValidUidList(data.downloadedBy, 20))
         && (!('tokens' in data) || (data.tokens is list && data.tokens.size() <= 40))
         && (data.createdAt == null || data.createdAt is timestamp)
         && isValidUidList(data.readBy, 20)
@@ -553,9 +649,10 @@ service cloud.firestore {
           )
         )
         && (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is timestamp)
-        && (!('expireSeconds' in data) || data.expireSeconds == null || (data.expireSeconds is number && data.expireSeconds in [10, 60]))
+        && (!('expireSeconds' in data) || data.expireSeconds == null || data.expireSeconds == 10 || data.expireSeconds == 60)
         && (!('deletedFor' in data) || isValidUidList(data.deletedFor, 20))
         && (!('deletedForEveryone' in data) || data.deletedForEveryone is bool)
+        && (!('expiredDeleted' in data) || data.expiredDeleted is bool)
         && (!('replyToId' in data) || data.replyToId == null || (data.replyToId is string && data.replyToId.size() <= 128))
         && (!('replyToText' in data) || data.replyToText == null || (data.replyToText is string && data.replyToText.size() <= 400))
         && (!('replyToSenderId' in data) || data.replyToSenderId == null || (data.replyToSenderId is string && data.replyToSenderId.size() <= 128))
@@ -600,7 +697,8 @@ service cloud.firestore {
           'groupName',
           'createdAt',
           'unreadCounts',
-          'typing'
+          'typing',
+          'groupPhotoUrl'
         ])
         && (
           request.auth.uid == resource.data.createdBy
@@ -625,21 +723,32 @@ service cloud.firestore {
     }
 
     function onlyDeletedForMeUpdate() {
+      let deletedFor = request.resource.data.get('deletedFor', []);
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletedFor'])
-        && request.auth.uid in request.resource.data.deletedFor;
+        && deletedFor is list
+        && request.auth.uid in deletedFor;
     }
 
     function senderSoftDeleteUpdate() {
       return resource.data.senderId == request.auth.uid
-        && request.resource.data.deletedForEveryone == true
-        && request.resource.data.text == ''
+        && request.resource.data.get('deletedForEveryone', false) == true
+        && request.resource.data.get('text', 'x') == ''
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['deletedForEveryone', 'text', 'mediaUrl']);
     }
 
+    function expireSoftDeleteUpdate() {
+      let expiresAt = resource.data.get('expiresAt', null);
+      return expiresAt is timestamp
+        && expiresAt < request.time
+        && request.resource.data.get('expiredDeleted', false) == true
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['expiredDeleted']);
+    }
+
     function senderEditUpdate() {
       return resource.data.senderId == request.auth.uid
-        && resource.data.deletedForEveryone != true
+        && resource.data.get('deletedForEveryone', false) != true
         && request.resource.data.text is string
         && request.resource.data.text.size() > 0
         && request.resource.data.text.size() <= 4000
@@ -648,11 +757,24 @@ service cloud.firestore {
           .hasOnly(['text', 'editedAt', 'tokens']);
     }
 
+    function onlyDownloadedByMeUpdate() {
+      let after = request.resource.data.get('downloadedBy', []);
+      let before = resource.data.get('downloadedBy', []);
+      return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['downloadedBy'])
+        && after is list
+        && before is list
+        && request.auth.uid in after
+        && after.hasAll(before)
+        && after.size() == before.size() + 1;
+    }
+
     function onlyReactionUpdate() {
+      let reactions = request.resource.data.get('reactions', {});
       return request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['reactions'])
-        && request.resource.data.reactions is map
-        && request.resource.data.reactions.size() <= 80;
+        && reactions is map
+        && reactions.size() <= 80;
     }
 
     match /users/{userId} {
@@ -664,21 +786,38 @@ service cloud.firestore {
           !('emailOtpVerified' in request.resource.data)
           || request.resource.data.emailOtpVerified == false
         );
-      allow update: if isSelf(userId)
-        && isValidUser(request.resource.data)
-        && request.resource.data.email == resource.data.email
-        && request.resource.data.createdAt == resource.data.createdAt
-        && (
-          !('emailOtpVerified' in resource.data)
-            ? (
-              !('emailOtpVerified' in request.resource.data)
-              || request.resource.data.emailOtpVerified == false
-            )
-            : request.resource.data.emailOtpVerified == resource.data.emailOtpVerified
+      allow update: if (
+          isSelf(userId)
+          && isValidUser(request.resource.data)
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.get('staffPerms', []) == resource.data.get('staffPerms', [])
+          && request.resource.data.get('photoHidden', false) == resource.data.get('photoHidden', false)
+          && (
+            !('emailOtpVerified' in resource.data)
+              ? (
+                !('emailOtpVerified' in request.resource.data)
+                || request.resource.data.emailOtpVerified == false
+              )
+              : request.resource.data.emailOtpVerified == resource.data.emailOtpVerified
+          )
+          && (
+            !('acceptedTermsAt' in resource.data)
+            || request.resource.data.acceptedTermsAt == resource.data.acceptedTermsAt
+          )
         )
-        && (
-          !('acceptedTermsAt' in resource.data)
-          || request.resource.data.acceptedTermsAt == resource.data.acceptedTermsAt
+        || (
+          isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['staffPerms'])
+          && request.resource.data.staffPerms is list
+          && request.resource.data.staffPerms.size() <= 20
+          && resource.data.email.lower() != 'zttnlnkc@gmail.com'
+        )
+        || (
+          hasStaffPerm('punishReports')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['photoHidden'])
+          && request.resource.data.photoHidden is bool
+          && resource.data.email.lower() != 'zttnlnkc@gmail.com'
         );
       allow delete: if isSelf(userId);
 
@@ -712,6 +851,25 @@ service cloud.firestore {
           && !isUserBanned()
           && request.auth.uid != userId
           && isValidIncomingNudge(userId, request.resource.data);
+        allow update: if false;
+        allow delete: if isSelf(userId);
+      }
+
+      match /forceLockAllow/{peerId} {
+        allow get: if isSelf(userId) || request.auth.uid == peerId;
+        allow list: if isSelf(userId);
+        allow create, update: if isSelf(userId)
+          && peerId != userId
+          && isValidNudgeAllow(peerId, request.resource.data);
+        allow delete: if isSelf(userId);
+      }
+
+      match /incomingForceLocks/{lockId} {
+        allow read: if isSelf(userId);
+        allow create: if isSignedIn()
+          && !isUserBanned()
+          && request.auth.uid != userId
+          && isValidIncomingForceLock(userId, request.resource.data);
         allow update: if false;
         allow delete: if isSelf(userId);
       }
@@ -788,13 +946,19 @@ service cloud.firestore {
     }
 
     match /chats/{chatId} {
-      allow get: if isAdmin() || (isSignedIn() && (
-        !exists(/databases/$(database)/documents/chats/$(chatId))
-        || request.auth.uid in resource.data.participants
-      ));
-      allow list: if isAdmin() || (
-        isSignedIn() && request.auth.uid in resource.data.participants
-      );
+      allow get: if isAdmin()
+        || hasStaffPerm('viewGroups')
+        || hasStaffPerm('viewUsers')
+        || (isSignedIn() && (
+          !exists(/databases/$(database)/documents/chats/$(chatId))
+          || request.auth.uid in resource.data.participants
+        ));
+      allow list: if isAdmin()
+        || hasStaffPerm('viewGroups')
+        || hasStaffPerm('viewUsers')
+        || (
+          isSignedIn() && request.auth.uid in resource.data.participants
+        );
 
       allow create: if isSignedIn()
         && !isUserBanned()
@@ -833,7 +997,17 @@ service cloud.firestore {
             'blockedBy'
           ])
           && blockedBySelfOnly()
-          && isValidChat(request.resource.data)
+          && isValidChatPreviewUpdate()
+        )
+        || (
+          resource.data.isGroup == true
+          && (isAdmin() || hasStaffPerm('timeoutGroup'))
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['groupTimeoutUntil'])
+          && (
+            request.resource.data.groupTimeoutUntil == null
+            || request.resource.data.groupTimeoutUntil is timestamp
+          )
         )
       );
 
@@ -844,6 +1018,11 @@ service cloud.firestore {
 
         allow create: if isChatParticipant(chatId)
           && chatNotBlocked(chatId)
+          && (
+            !('groupTimeoutUntil' in chatDoc(chatId).data)
+            || !(chatDoc(chatId).data.groupTimeoutUntil is timestamp)
+            || chatDoc(chatId).data.groupTimeoutUntil <= request.time
+          )
           && !isUserBanned()
           && request.resource.data.senderId == request.auth.uid
           && request.resource.data.text is string
@@ -863,6 +1042,10 @@ service cloud.firestore {
           && (
             !('deletedForEveryone' in request.resource.data)
             || request.resource.data.deletedForEveryone == false
+          )
+          && (
+            !('expiredDeleted' in request.resource.data)
+            || request.resource.data.expiredDeleted == false
           );
 
         allow update: if isChatParticipant(chatId)
@@ -877,9 +1060,11 @@ service cloud.firestore {
           && (
             onlyDeletedForMeUpdate()
             || senderSoftDeleteUpdate()
+            || expireSoftDeleteUpdate()
             || senderEditUpdate()
             || onlyReadReceiptUpdate()
             || onlyReactionUpdate()
+            || onlyDownloadedByMeUpdate()
           );
 
         allow delete: if isChatParticipant(chatId)
@@ -895,8 +1080,8 @@ service cloud.firestore {
 
     match /reports/{reportId} {
       allow create: if isSignedIn() && isValidReportCreate(request.resource.data);
-      allow read: if isAdmin();
-      allow update: if isAdmin()
+      allow read: if isAdmin() || hasStaffPerm('viewReports') || hasStaffPerm('punishReports');
+      allow update: if (isAdmin() || hasStaffPerm('punishReports'))
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['status', 'action', 'reviewedAt'])
         && request.resource.data.status in ['pending', 'reviewed', 'actioned']
@@ -926,26 +1111,31 @@ service cloud.firestore {
           && (request.resource.data.createdAt == null
             || request.resource.data.createdAt is timestamp)
           && request.resource.data.reported is bool;
-        allow read: if isAdmin();
+        allow read: if isAdmin() || hasStaffPerm('viewReports') || hasStaffPerm('punishReports');
         allow update: if false;
         allow delete: if isAdmin();
       }
     }
 
     match /moderation/{userId} {
-      allow read: if isAdmin() || isSelf(userId);
-      allow create, update: if isAdmin() && isValidModeration(request.resource.data);
-      allow delete: if isAdmin();
+      allow read: if isAdmin() || hasStaffPerm('punishReports') || hasStaffPerm('viewReports') || isSelf(userId);
+      allow create, update: if (isAdmin() || hasStaffPerm('punishReports'))
+        && userId != 'RUwHPHB6HRdy3l6jBsIexmDHYAB3'
+        && isValidModeration(request.resource.data);
+      allow delete: if isAdmin() || hasStaffPerm('punishReports');
     }
 
     match /bannedEmails/{userEmail} {
-      allow read: if isAdmin() || authEmailLower() == userEmail;
-      allow create, update: if isAdmin() && isValidModeration(request.resource.data);
-      allow delete: if isAdmin();
+      allow read: if isAdmin() || hasStaffPerm('punishReports') || hasStaffPerm('viewReports') || authEmailLower() == userEmail;
+      allow create, update: if (isAdmin() || hasStaffPerm('punishReports'))
+        && userEmail != 'zttnlnkc@gmail.com'
+        && isValidModeration(request.resource.data);
+      allow delete: if (isAdmin() || hasStaffPerm('punishReports'))
+        && userEmail != 'zttnlnkc@gmail.com';
     }
 
     match /authEvents/{eventId} {
-      allow read: if isAdmin();
+      allow read: if isAdmin() || hasStaffPerm('readLogs');
       allow create: if isValidAuthEvent(request.resource.data)
         && (
           (

@@ -1,5 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/chat_format.dart';
+import '../core/emoji_catalog.dart';
+
 class AppUser {
   const AppUser({
     required this.id,
@@ -12,6 +15,10 @@ class AppUser {
     this.acceptedTermsAt,
     this.emailOtpVerified = false,
     this.displayNameChangedAt,
+    this.quickEmojis,
+    this.photoUrl = '',
+    this.photoHidden = false,
+    this.staffPerms = const [],
   });
 
   final String id;
@@ -24,9 +31,27 @@ class AppUser {
   final DateTime? acceptedTermsAt;
   final bool emailOtpVerified;
   final DateTime? displayNameChangedAt;
+  final List<String>? quickEmojis;
+  final String photoUrl;
+  final bool photoHidden;
+  final List<String> staffPerms;
 
   String get visibleName =>
       displayName.trim().isNotEmpty ? displayName.trim() : email;
+
+  String? get visiblePhotoUrl {
+    if (photoHidden) return null;
+    if (photoUrl.startsWith('http')) return photoUrl;
+    return null;
+  }
+
+  bool get hasStaffAccess => staffPerms.isNotEmpty;
+
+  bool isEffectivelyOnline([DateTime? now]) => ChatFormat.isFreshOnline(
+        isOnline: isOnline,
+        lastSeen: lastSeen,
+        now: now,
+      );
 
   Duration? get displayNameCooldown {
     final last = displayNameChangedAt;
@@ -38,6 +63,13 @@ class AppUser {
   bool get needsEmailOtp {
     if (emailOtpVerified) return false;
     return acceptedTermsAt != null;
+  }
+
+  static List<String>? _readQuickEmojis(Object? raw) {
+    if (raw is! List) return null;
+    final cleaned = EmojiCatalog.normalize(raw.whereType<String>());
+    if (cleaned.isEmpty) return null;
+    return cleaned;
   }
 
   factory AppUser.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
@@ -54,6 +86,10 @@ class AppUser {
       emailOtpVerified: data['emailOtpVerified'] as bool? ?? false,
       displayNameChangedAt:
           (data['displayNameChangedAt'] as Timestamp?)?.toDate(),
+      quickEmojis: _readQuickEmojis(data['quickEmojis']),
+      photoUrl: data['photoUrl'] as String? ?? '',
+      photoHidden: data['photoHidden'] as bool? ?? false,
+      staffPerms: List<String>.from(data['staffPerms'] as List? ?? const []),
     );
   }
 

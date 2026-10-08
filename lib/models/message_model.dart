@@ -24,8 +24,12 @@ class ChatMessage {
     this.expireSeconds,
     this.deletedFor = const [],
     this.deletedForEveryone = false,
+    this.expiredDeleted = false,
     this.editedAt,
     this.reactions = const {},
+    this.downloadedBy = const [],
+    this.pendingWrite = false,
+    this.clientKey,
   });
 
   final String id;
@@ -46,8 +50,12 @@ class ChatMessage {
   final int? expireSeconds;
   final List<String> deletedFor;
   final bool deletedForEveryone;
+  final bool expiredDeleted;
   final DateTime? editedAt;
   final Map<String, String> reactions;
+  final List<String> downloadedBy;
+  final bool pendingWrite;
+  final String? clientKey;
 
   bool get wasEdited => editedAt != null;
   bool get hasMedia =>
@@ -55,6 +63,21 @@ class ChatMessage {
       (mediaUrl ?? '').isNotEmpty;
   bool get hasFile =>
       type == MessageType.file && (mediaUrl ?? '').isNotEmpty;
+
+  bool get isHttpMedia {
+    final url = mediaUrl ?? '';
+    return url.startsWith('http://') || url.startsWith('https://');
+  }
+
+  bool get isStoragePath {
+    final url = mediaUrl ?? '';
+    return url.startsWith('chat_media/') || url.startsWith('pending_media/');
+  }
+
+  bool get isLocalMediaFile {
+    final url = mediaUrl ?? '';
+    return url.isNotEmpty && !isHttpMedia && !isStoragePath;
+  }
 
   bool isReadBy(String userId) => readBy.contains(userId);
 
@@ -66,6 +89,7 @@ class ChatMessage {
 
   bool isVisibleTo(String userId, {DateTime? clearedAt}) {
     if (deletedForEveryone) return false;
+    if (expiredDeleted) return false;
     if (deletedFor.contains(userId)) return false;
     if (isExpired()) return false;
     if (clearedAt != null && createdAt != null && !createdAt!.isAfter(clearedAt)) {
@@ -169,8 +193,44 @@ class ChatMessage {
       expireSeconds: (data['expireSeconds'] as num?)?.toInt(),
       deletedFor: List<String>.from(data['deletedFor'] as List? ?? []),
       deletedForEveryone: data['deletedForEveryone'] as bool? ?? false,
+      expiredDeleted: data['expiredDeleted'] as bool? ?? false,
       editedAt: (data['editedAt'] as Timestamp?)?.toDate(),
       reactions: _reactionsOf(data['reactions']),
+      downloadedBy: List<String>.from(data['downloadedBy'] as List? ?? const []),
+      pendingWrite: doc.metadata.hasPendingWrites,
+    );
+  }
+
+  ChatMessage copyWith({
+    String? id,
+    bool? pendingWrite,
+    String? clientKey,
+  }) {
+    return ChatMessage(
+      id: id ?? this.id,
+      senderId: senderId,
+      text: text,
+      createdAt: createdAt,
+      readBy: readBy,
+      readAt: readAt,
+      type: type,
+      mediaUrl: mediaUrl,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileMime: fileMime,
+      replyToId: replyToId,
+      replyToText: replyToText,
+      replyToSenderId: replyToSenderId,
+      expiresAt: expiresAt,
+      expireSeconds: expireSeconds,
+      deletedFor: deletedFor,
+      deletedForEveryone: deletedForEveryone,
+      expiredDeleted: expiredDeleted,
+      editedAt: editedAt,
+      reactions: reactions,
+      downloadedBy: downloadedBy,
+      pendingWrite: pendingWrite ?? this.pendingWrite,
+      clientKey: clientKey ?? this.clientKey,
     );
   }
 
@@ -179,29 +239,38 @@ class ChatMessage {
       'senderId': senderId,
       'text': text,
       'type': typeRaw(type),
-      'createdAt': createdAt != null
-          ? Timestamp.fromDate(createdAt!)
-          : FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
       'readBy': readBy,
       if (readAt.isNotEmpty)
         'readAt': {
           for (final entry in readAt.entries)
             entry.key: Timestamp.fromDate(entry.value),
         },
-      'deletedFor': deletedFor,
-      'deletedForEveryone': deletedForEveryone,
+      if (deletedFor.isNotEmpty) 'deletedFor': deletedFor,
+      if (deletedForEveryone) 'deletedForEveryone': true,
+      if (expiredDeleted) 'expiredDeleted': true,
       'tokens': SearchTokens.fromText('$text $preview ${fileName ?? ''}'),
       if (mediaUrl != null) 'mediaUrl': mediaUrl,
-      if (fileName != null) 'fileName': fileName,
+      if (fileName != null) 'fileName': _clip(fileName!, 200),
       if (fileSize != null) 'fileSize': fileSize,
-      if (fileMime != null) 'fileMime': fileMime,
-      if (replyToId != null) 'replyToId': replyToId,
-      if (replyToText != null) 'replyToText': replyToText,
-      if (replyToSenderId != null) 'replyToSenderId': replyToSenderId,
+      if (fileMime != null) 'fileMime': _clip(fileMime!, 120),
+      if (replyToId != null && !replyToId!.startsWith('local-'))
+        'replyToId': _clip(replyToId!, 128),
+      if (replyToText != null && replyToText!.trim().isNotEmpty)
+        'replyToText': _clip(replyToText!, 400),
+      if (replyToSenderId != null && replyToSenderId!.isNotEmpty)
+        'replyToSenderId': _clip(replyToSenderId!, 128),
       if (expiresAt != null) 'expiresAt': Timestamp.fromDate(expiresAt!),
       if (expireSeconds != null) 'expireSeconds': expireSeconds,
       if (editedAt != null) 'editedAt': Timestamp.fromDate(editedAt!),
       if (reactions.isNotEmpty) 'reactions': reactions,
+      if (downloadedBy.isNotEmpty) 'downloadedBy': downloadedBy,
     };
+  }
+
+  static String _clip(String value, int max) {
+    final text = value.trim();
+    if (text.length <= max) return text;
+    return text.substring(0, max);
   }
 }

@@ -15,7 +15,7 @@ class ChatListScreen extends StatelessWidget {
 
   String _formatLastSeen(AppUser? user) {
     if (user == null) return '';
-    if (user.isOnline) return 'Çevrimiçi';
+    if (user.isEffectivelyOnline()) return 'Çevrimiçi';
     if (user.lastSeen == null) return 'Son görülme bilinmiyor';
     return 'Son görülme: ${DateFormat('dd.MM.yyyy HH:mm').format(user.lastSeen!)}';
   }

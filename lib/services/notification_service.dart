@@ -139,9 +139,11 @@ class NotificationService with WidgetsBindingObserver {
   }
 
   void _onForegroundMessage(RemoteMessage message) {
-    if (message.data['type'] == 'nudge' &&
-        NudgeHaptic.isFresh(message.sentTime)) {
+    final type = message.data['type'];
+    if (type == 'nudge' && NudgeHaptic.isFresh(message.sentTime)) {
       unawaited(NudgeHaptic.play());
+      final name = (message.data['fromName'] ?? '').trim();
+      unawaited(showNudge(sender: name.isEmpty ? 'Birisi' : name));
     }
   }
 
@@ -219,6 +221,48 @@ class NotificationService with WidgetsBindingObserver {
             AndroidFlutterLocalNotificationsPlugin
           >()
           ?.requestNotificationsPermission();
+    } catch (_) {}
+  }
+
+  Future<void> cancelChat(String chatId) async {
+    if (chatId.isEmpty) return;
+    try {
+      await _plugin.cancel(id: chatId.hashCode);
+      await _plugin.cancel(id: chatId.hashCode, tag: 'chat-$chatId');
+    } catch (_) {}
+  }
+
+  Future<void> showNudge({
+    required String sender,
+  }) async {
+    if (_settings.notificationLook == NotificationLook.off) return;
+    await requestPermission();
+    final silent = !_settings.soundEnabled && !_settings.vibrateEnabled;
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        silent ? 'hm_silent' : 'hm_alert',
+        silent ? 'Hesaplamalar' : 'Kayıtlar',
+        channelDescription: silent ? 'Sessiz uyarilar' : 'Kayıt uyarilari',
+        importance: silent ? Importance.low : Importance.high,
+        priority: silent ? Priority.low : Priority.high,
+        playSound: _settings.soundEnabled,
+        enableVibration: _settings.vibrateEnabled,
+        silent: silent,
+        icon: '@mipmap/ic_launcher',
+      ),
+      iOS: DarwinNotificationDetails(
+        presentAlert: true,
+        presentSound: _settings.soundEnabled,
+        presentBadge: false,
+      ),
+    );
+    try {
+      await _plugin.show(
+        id: sender.hashCode ^ 17,
+        title: sender.trim().isEmpty ? 'Birisi' : sender.trim(),
+        body: 'Sizi dürttü.',
+        notificationDetails: details,
+      );
     } catch (_) {}
   }
 

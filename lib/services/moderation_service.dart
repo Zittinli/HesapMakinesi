@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../core/admin_config.dart';
+import '../core/staff_perms.dart';
 import '../models/message_model.dart';
 import '../models/moderation_model.dart';
 import '../models/report_model.dart';
@@ -25,6 +26,31 @@ class ModerationService {
       _firestore.collection('bannedEmails');
 
   bool get isAdmin => AdminConfig.isAdminEmail(_auth.currentUser?.email);
+
+  bool get isFounder => AdminConfig.isFounder(
+        email: _auth.currentUser?.email,
+        userId: _auth.currentUser?.uid,
+      );
+
+  Future<Set<String>> myStaffPerms() async {
+    if (isFounder) return StaffPerm.all.toSet();
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return {};
+    final snap = await _firestore.collection('users').doc(uid).get();
+    final raw = List<String>.from(snap.data()?['staffPerms'] as List? ?? const []);
+    return StaffPerm.normalize(raw);
+  }
+
+  Future<bool> hasStaffPerm(String perm) async {
+    if (isFounder) return true;
+    return (await myStaffPerms()).contains(perm);
+  }
+
+  Future<void> _requirePerm(String perm) async {
+    if (!await hasStaffPerm(perm)) {
+      throw StateError('Bu işlem için yetki yok.');
+    }
+  }
 
   static String emailDocId(String email) => email.trim().toLowerCase();
 
@@ -303,13 +329,17 @@ class ModerationService {
     Duration? timeout,
     bool permanent = false,
   }) async {
-    if (AdminConfig.isAdminEmail(email)) {
-      throw StateError('Yönetici hesaba ceza uygulanamaz.');
+    if (AdminConfig.isFounder(email: email, userId: userId)) {
+      throw StateError('Kurucu yöneticiye ceza uygulanamaz.');
     }
     final admin = _auth.currentUser;
-    if (admin == null || !isAdmin) {
-      throw StateError('Bu işlem için yetki yok.');
-    }
+    if (admin == null) throw StateError('Bu işlem için yetki yok.');
+    await _requirePerm(StaffPerm.punishReports);
+
+    final existing = userId.isEmpty
+        ? null
+        : await _moderation.doc(userId).get();
+    final hide = existing?.data()?['hideProfilePhoto'] == true;
 
     final payload = <String, dynamic>{
       'bannedPermanently': permanent,
@@ -320,14 +350,45 @@ class ModerationService {
       'email': email.trim().toLowerCase(),
       'updatedAt': FieldValue.serverTimestamp(),
       'updatedBy': admin.uid,
+      'hideProfilePhoto': hide,
     };
 
     final batch = _firestore.batch();
     if (userId.isNotEmpty) {
-      batch.set(_moderation.doc(userId), payload);
+      batch.set(_moderation.doc(userId), payload, SetOptions(merge: true));
     }
     if (email.trim().isNotEmpty) {
-      batch.set(_bannedEmails.doc(emailDocId(email)), payload);
+      batch.set(_bannedEmails.doc(emailDocId(email)), payload, SetOptions(merge: true));
+    }
+    await batch.commit();
+  }
+
+  Future<void> setProfilePhotoHidden({
+    required String userId,
+    required String email,
+    required bool hidden,
+  }) async {
+    if (AdminConfig.isFounder(email: email, userId: userId)) {
+      throw StateError('Kurucu yöneticinin fotoğrafı gizlenemez.');
+    }
+    final admin = _auth.currentUser;
+    if (admin == null) throw StateError('Bu işlem için yetki yok.');
+    await _requirePerm(StaffPerm.punishReports);
+    final payload = <String, dynamic>{
+      'hideProfilePhoto': hidden,
+      'email': email.trim().toLowerCase(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': admin.uid,
+    };
+    final batch = _firestore.batch();
+    if (userId.isNotEmpty) {
+      batch.set(_moderation.doc(userId), payload, SetOptions(merge: true));
+      batch.update(_firestore.collection('users').doc(userId), {
+        'photoHidden': hidden,
+      });
+    }
+    if (email.trim().isNotEmpty) {
+      batch.set(_bannedEmails.doc(emailDocId(email)), payload, SetOptions(merge: true));
     }
     await batch.commit();
   }
@@ -337,31 +398,49 @@ class ModerationService {
     required String email,
   }) async {
     final admin = _auth.currentUser;
-    if (admin == null || !isAdmin) {
-      throw StateError('Bu işlem için yetki yok.');
-    }
+    if (admin == null) throw StateError('Bu işlem için yetki yok.');
+    await _requirePerm(StaffPerm.punishReports);
+    final payload = <String, dynamic>{
+      'bannedPermanently': false,
+      'timeoutUntil': null,
+      'reason': '',
+      'email': email.trim().toLowerCase(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': admin.uid,
+    };
     final batch = _firestore.batch();
     if (userId.isNotEmpty) {
-      batch.delete(_moderation.doc(userId));
+      batch.set(_moderation.doc(userId), payload, SetOptions(merge: true));
     }
     if (email.trim().isNotEmpty) {
-      batch.delete(_bannedEmails.doc(emailDocId(email)));
+      batch.set(_bannedEmails.doc(emailDocId(email)), payload, SetOptions(merge: true));
     }
     await batch.commit();
+  }
+
+  Future<void> timeoutGroup({
+    required String chatId,
+    Duration? timeout,
+  }) async {
+    await _requirePerm(StaffPerm.timeoutGroup);
+    await ChatService(firestore: _firestore).setGroupTimeout(
+      chatId: chatId,
+      timeout: timeout,
+    );
   }
 
   Future<void> removeReportedUserFromGroup({
     required String chatId,
     required String userId,
   }) async {
-    if (!isAdmin) throw StateError('Bu işlem için yetki yok.');
+    await _requirePerm(StaffPerm.punishReports);
     await ChatService(
       firestore: _firestore,
     ).appAdminRemoveFromGroup(chatId: chatId, userId: userId);
   }
 
   Future<int> removeReportedUserFromAllGroups(String userId) async {
-    if (!isAdmin) throw StateError('Bu işlem için yetki yok.');
+    await _requirePerm(StaffPerm.punishReports);
     return ChatService(
       firestore: _firestore,
     ).appAdminRemoveFromAllGroups(userId);

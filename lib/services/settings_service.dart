@@ -1,7 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/emoji_catalog.dart';
 import '../core/secret_config.dart';
 import '../core/theme/calculator_palette.dart';
 import '../models/notification_look.dart';
@@ -28,7 +32,11 @@ class SettingsService extends ChangeNotifier {
   static const _keyTheme = 'calculator_theme';
   static const _keyHistory = 'calculator_history';
   static const _keyIdleSeconds = 'chat_idle_seconds';
+  static const _keySkipCalculator = 'privacy_skip_calculator';
   static const _keyFavoriteEmojis = 'chat_favorite_emojis';
+  static const _keyDownloadedMedia = 'chat_downloaded_media';
+  static const _keyUploadedMedia = 'chat_uploaded_media';
+  static const _keyMediaFiles = 'chat_media_files_v1';
   static const defaultFavoriteEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
   static const allowedOperators = ['×', '+', '-', '÷'];
@@ -45,8 +53,13 @@ class SettingsService extends ChangeNotifier {
   bool _screenProtectionEnabled = false;
   CalculatorSkin _calculatorSkin = CalculatorSkin.samsung;
   int _chatIdleSeconds = 150;
+  bool _skipCalculator = false;
   List<String> _calculatorHistory = [];
   List<String> _favoriteEmojis = List<String>.from(defaultFavoriteEmojis);
+  bool _preferLocalQuickEmojis = false;
+  final Set<String> _downloadedMediaIds = {};
+  final Set<String> _uploadedMediaIds = {};
+  final Map<String, String> _mediaFiles = {};
   bool _ready = false;
 
   String get unlockLeft => _unlockLeft;
@@ -62,10 +75,24 @@ class SettingsService extends ChangeNotifier {
   bool get screenProtectionEnabled => _screenProtectionEnabled;
   CalculatorSkin get calculatorSkin => _calculatorSkin;
   int get chatIdleSeconds => _chatIdleSeconds;
+  bool get skipCalculator => _skipCalculator;
   bool get showIdleCountdown => false;
   List<String> get calculatorHistory => List.unmodifiable(_calculatorHistory);
   List<String> get favoriteEmojis => List.unmodifiable(_favoriteEmojis);
   bool get ready => _ready;
+
+  bool isMediaDownloaded(String messageId) =>
+      messageId.isNotEmpty && _downloadedMediaIds.contains(messageId);
+
+  bool isMediaUploaded(String messageId) =>
+      messageId.isNotEmpty && _uploadedMediaIds.contains(messageId);
+
+  String? mediaFilePath(String key) {
+    if (key.isEmpty) return null;
+    final path = _mediaFiles[key];
+    if (path == null || path.isEmpty) return null;
+    return path;
+  }
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -92,11 +119,22 @@ class SettingsService extends ChangeNotifier {
     _chatIdleSeconds = prefs.getInt(_keyIdleSeconds) ?? 150;
     if (_chatIdleSeconds < 30) _chatIdleSeconds = 30;
     if (_chatIdleSeconds > 1800) _chatIdleSeconds = 1800;
+    _skipCalculator = prefs.getBool(_keySkipCalculator) ?? false;
     _calculatorHistory = prefs.getStringList(_keyHistory) ?? [];
     final savedEmojis = prefs.getStringList(_keyFavoriteEmojis);
-    _favoriteEmojis = (savedEmojis == null || savedEmojis.isEmpty)
+    final cleaned = EmojiCatalog.normalize(savedEmojis ?? const []);
+    _favoriteEmojis = cleaned.isEmpty
         ? List<String>.from(defaultFavoriteEmojis)
-        : savedEmojis.take(8).toList();
+        : cleaned;
+    _downloadedMediaIds
+      ..clear()
+      ..addAll(prefs.getStringList(_keyDownloadedMedia) ?? const []);
+    _uploadedMediaIds
+      ..clear()
+      ..addAll(prefs.getStringList(_keyUploadedMedia) ?? const []);
+    _mediaFiles
+      ..clear()
+      ..addAll(_readMediaFiles(prefs.getString(_keyMediaFiles)));
     await _syncScreenProtection();
     _ready = true;
     notifyListeners();
@@ -201,16 +239,86 @@ class SettingsService extends ChangeNotifier {
   }
 
   Future<void> setFavoriteEmojis(List<String> emojis) async {
-    _favoriteEmojis = emojis
-        .map((item) => item.trim())
-        .where((item) => item.isNotEmpty)
-        .take(8)
-        .toList();
-    if (_favoriteEmojis.isEmpty) {
-      _favoriteEmojis = List<String>.from(defaultFavoriteEmojis);
-    }
+    final cleaned = EmojiCatalog.normalize(emojis);
+    _favoriteEmojis = cleaned.isEmpty
+        ? List<String>.from(defaultFavoriteEmojis)
+        : cleaned;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_keyFavoriteEmojis, _favoriteEmojis);
+    notifyListeners();
+  }
+
+  void keepLocalQuickEmojis() {
+    _preferLocalQuickEmojis = true;
+  }
+
+  void applyFavoriteEmojis(List<String> emojis) {
+    final cleaned = EmojiCatalog.normalize(emojis);
+    if (cleaned.isEmpty) return;
+    if (_preferLocalQuickEmojis) {
+      if (listEquals(cleaned, _favoriteEmojis)) {
+        _preferLocalQuickEmojis = false;
+      }
+      return;
+    }
+    if (listEquals(cleaned, _favoriteEmojis)) return;
+    _favoriteEmojis = cleaned;
+    notifyListeners();
+    unawaited(() async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_keyFavoriteEmojis, _favoriteEmojis);
+    }());
+  }
+
+  Future<void> markMediaDownloaded(String messageId) async {
+    if (messageId.isEmpty || !_downloadedMediaIds.add(messageId)) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _keyDownloadedMedia,
+      _downloadedMediaIds.toList(),
+    );
+    notifyListeners();
+  }
+
+  Future<void> rememberMediaFile(Iterable<String> keys, String path) async {
+    if (path.isEmpty) return;
+    var changed = false;
+    for (final key in keys) {
+      if (key.isEmpty) continue;
+      if (_mediaFiles[key] == path) continue;
+      _mediaFiles[key] = path;
+      changed = true;
+    }
+    if (!changed) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyMediaFiles, jsonEncode(_mediaFiles));
+    notifyListeners();
+  }
+
+  Map<String, String> _readMediaFiles(String? raw) {
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return {
+        for (final entry in decoded.entries)
+          if (entry.key is String && entry.value is String)
+            entry.key as String: entry.value as String,
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> markMediaUploaded(Iterable<String> messageIds) async {
+    var changed = false;
+    for (final id in messageIds) {
+      if (id.isEmpty) continue;
+      if (_uploadedMediaIds.add(id)) changed = true;
+    }
+    if (!changed) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_keyUploadedMedia, _uploadedMediaIds.toList());
     notifyListeners();
   }
 
@@ -222,6 +330,13 @@ class SettingsService extends ChangeNotifier {
       next.add(emoji);
     }
     await setFavoriteEmojis(next);
+  }
+
+  Future<void> setSkipCalculator(bool value) async {
+    _skipCalculator = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keySkipCalculator, value);
+    notifyListeners();
   }
 
   Future<void> setLastSeenEnabled(bool value) async {

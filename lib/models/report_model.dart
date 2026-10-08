@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-enum ReportReason { spam, abuse, hate, sexual, illegal, other }
+enum ReportReason { spam, abuse, hate, sexual, illegal, profilePhoto, other }
 
 extension ReportReasonLabel on ReportReason {
   String get label {
@@ -15,6 +15,8 @@ extension ReportReasonLabel on ReportReason {
         return 'Cinsel içerik';
       case ReportReason.illegal:
         return 'Yasa dışı içerik';
+      case ReportReason.profilePhoto:
+        return 'Uygunsuz profil fotoğrafı';
       case ReportReason.other:
         return 'Diğer';
     }

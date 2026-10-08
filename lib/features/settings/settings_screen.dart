@@ -1,15 +1,20 @@
+import 'dart:io';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/admin_config.dart';
-import '../../core/chat_format.dart';
 import '../../core/registration_terms.dart';
 import '../../core/slide_from_right_route.dart';
+import '../../core/ticking_builder.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/release_notes_service.dart';
+import '../../services/storage_service.dart';
+import '../../widgets/profile_avatar.dart';
 import 'admin_home_screen.dart';
+import 'profile_photo_picker.dart';
 import 'release_history_screen.dart';
 import 'notification_settings_screen.dart';
 import 'privacy_settings_screen.dart';
@@ -123,7 +128,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: [
-          const _DisplayNameSettings(),
+          const _ProfileSettings(),
           const SizedBox(height: 8),
           const Divider(color: Color(0xFF222222)),
           const SizedBox(height: 8),
@@ -470,17 +475,19 @@ class _ReadOnlyNotes extends StatelessWidget {
   }
 }
 
-class _DisplayNameSettings extends StatefulWidget {
-  const _DisplayNameSettings();
+class _ProfileSettings extends StatefulWidget {
+  const _ProfileSettings();
 
   @override
-  State<_DisplayNameSettings> createState() => _DisplayNameSettingsState();
+  State<_ProfileSettings> createState() => _ProfileSettingsState();
 }
 
-class _DisplayNameSettingsState extends State<_DisplayNameSettings> {
+class _ProfileSettingsState extends State<_ProfileSettings> {
   late final TextEditingController _nameController;
   String? _error;
   bool _saving = false;
+  bool _uploading = false;
+  File? _preview;
 
   @override
   void initState() {
@@ -494,7 +501,7 @@ class _DisplayNameSettingsState extends State<_DisplayNameSettings> {
     super.dispose();
   }
 
-  Future<void> _save(AppUser? profile) async {
+  Future<void> _saveName() async {
     setState(() {
       _saving = true;
       _error = null;
@@ -515,6 +522,52 @@ class _DisplayNameSettingsState extends State<_DisplayNameSettings> {
     }
   }
 
+  Future<void> _changePhoto() async {
+    final auth = context.read<AuthService>();
+    final storage = context.read<StorageService>();
+    final file = await pickProfilePhoto(context);
+    if (file == null || !mounted) return;
+    setState(() {
+      _preview = file;
+      _uploading = true;
+      _error = null;
+    });
+    try {
+      final uid = auth.currentUser!.uid;
+      final url = await storage.uploadProfilePhoto(
+            folder: 'profile_photos/$uid',
+            file: file,
+          );
+      await auth.updateProfilePhotoUrl(url);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profil fotoğrafı güncellendi.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _preview = null;
+          _error = error.toString();
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _removePhoto() async {
+    setState(() => _uploading = true);
+    try {
+      await context.read<AuthService>().clearProfilePhoto();
+      if (mounted) setState(() => _preview = null);
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthService>();
@@ -528,43 +581,102 @@ class _DisplayNameSettingsState extends State<_DisplayNameSettings> {
         if (profile != null && _nameController.text.isEmpty) {
           _nameController.text = profile.displayName;
         }
-        final cooldown = profile?.displayNameCooldown;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Görünen ad',
+              'Profil',
               style: TextStyle(color: Colors.white70, fontSize: 16),
             ),
             const SizedBox(height: 6),
             const Text(
-              'Sohbette e-posta yerine bu ad görünür. En erken saatte bir değişir.',
-              style: TextStyle(
-                color: Colors.white38,
-                fontSize: 12,
-                height: 1.4,
-              ),
+              'Fotoğraf ve görünen ad sohbet listesinde görünür.',
+              style: TextStyle(color: Colors.white38, fontSize: 12, height: 1.4),
             ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _nameController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: const Color(0xFF1A1A1A),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Stack(
+                  children: [
+                    ProfileAvatar(
+                      name: profile?.visibleName ?? 'Profil',
+                      photoUrl: profile?.visiblePhotoUrl,
+                      hidden: profile?.photoHidden ?? false,
+                      file: _preview,
+                      radius: 36,
+                    ),
+                    if (_uploading)
+                      const Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Color(0x88000000),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-              ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextButton(
+                        onPressed: _uploading ? null : _changePhoto,
+                        child: const Text('Fotoğrafı değiştir'),
+                      ),
+                      if ((profile?.photoUrl ?? '').isNotEmpty)
+                        TextButton(
+                          onPressed: _uploading ? null : _removePhoto,
+                          child: const Text(
+                            'Fotoğrafı kaldır',
+                            style: TextStyle(color: Color(0xFFFF8A80)),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            if (cooldown != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Sonraki değişiklik: ${ChatFormat.eventDateTime(DateTime.now().add(cooldown))}',
-                style: const TextStyle(color: Colors.white38, fontSize: 12),
-              ),
-            ],
+            const SizedBox(height: 14),
+            TickingBuilder(
+              interval: const Duration(seconds: 15),
+              builder: (_) {
+                final cooldown = profile?.displayNameCooldown;
+                final minutes = cooldown == null
+                    ? null
+                    : (cooldown.inSeconds / 60).ceil().clamp(1, 999);
+                return TextField(
+                  controller: _nameController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: const Color(0xFF1A1A1A),
+                    hintText: 'Görünen ad',
+                    hintStyle: const TextStyle(color: Colors.white30),
+                    suffixText: minutes == null ? null : '$minutes dk',
+                    suffixStyle: const TextStyle(
+                      color: Color(0xFFFFCC80),
+                      fontSize: 12,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                );
+              },
+            ),
             if (_error != null) ...[
               const SizedBox(height: 8),
               Text(_error!, style: const TextStyle(color: Color(0xFFFF8A80))),
@@ -575,7 +687,7 @@ class _DisplayNameSettingsState extends State<_DisplayNameSettings> {
                 backgroundColor: const Color(0xFF2A2A2A),
                 foregroundColor: Colors.white,
               ),
-              onPressed: _saving ? null : () => _save(profile),
+              onPressed: _saving ? null : _saveName,
               child: Text(_saving ? 'Kaydediliyor...' : 'Adı kaydet'),
             ),
           ],

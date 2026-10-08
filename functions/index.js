@@ -104,7 +104,7 @@ async function sendChatPush({ recipients, chatId }) {
   });
 }
 
-async function sendNudgePush({ recipient, chatId, fromId }) {
+async function sendNudgePush({ recipient, chatId, fromId, fromName }) {
   const tokens = await collectTokens([recipient]);
   if (tokens.length === 0) {
     console.warn("nudge skipped: no tokens", recipient);
@@ -116,6 +116,7 @@ async function sendNudgePush({ recipient, chatId, fromId }) {
       type: "nudge",
       chatId: String(chatId || ""),
       from: String(fromId || ""),
+      fromName: String(fromName || "").slice(0, 80),
     },
     android: {
       priority: "high",
@@ -125,6 +126,22 @@ async function sendNudgePush({ recipient, chatId, fromId }) {
     tokens: tokens.length,
     ok: result.successCount,
     fail: result.failureCount,
+  });
+}
+
+async function sendForceLockPush({ recipient, chatId, fromId }) {
+  const tokens = await collectTokens([recipient]);
+  if (tokens.length === 0) return;
+  await getMessaging().sendEachForMulticast({
+    tokens,
+    data: {
+      type: "forceLock",
+      chatId: String(chatId || ""),
+      from: String(fromId || ""),
+    },
+    android: {
+      priority: "high",
+    },
   });
 }
 
@@ -172,14 +189,48 @@ exports.notifyOnNudge = onDocumentCreated(
       .doc(fromId)
       .get();
     if (allow.data()?.allow !== true) return;
+    let fromName = "";
+    try {
+      const fromSnap = await db.collection("users").doc(fromId).get();
+      fromName = fromSnap.data()?.displayName || fromSnap.data()?.email || "";
+    } catch (_) {}
     try {
       await sendNudgePush({
         recipient: toId,
         chatId,
         fromId,
+        fromName,
       });
     } catch (error) {
       console.error("Nudge push send failed", error);
+    }
+  },
+);
+
+exports.notifyOnForceLock = onDocumentCreated(
+  {
+    region: "europe-west1",
+    document: "users/{userId}/incomingForceLocks/{lockId}",
+  },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+    const toId = event.params.userId;
+    const fromId = data.from;
+    const chatId = data.chatId;
+    if (!toId || !fromId || !chatId) return;
+    const db = getFirestore();
+    const allow = await db
+      .collection("users")
+      .doc(toId)
+      .collection("forceLockAllow")
+      .doc(fromId)
+      .get();
+    if (allow.data()?.allow !== true) return;
+    try {
+      await sendForceLockPush({ recipient: toId, chatId, fromId });
+    } catch (error) {
+      console.error("Force lock push failed", error);
     }
   },
 );

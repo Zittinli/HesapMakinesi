@@ -15,6 +15,8 @@ class ChatRoom {
     this.unreadCounts = const {},
     this.typing = const {},
     this.blockedBy = const [],
+    this.groupPhotoUrl = '',
+    this.groupTimeoutUntil,
   });
 
   final String id;
@@ -30,6 +32,8 @@ class ChatRoom {
   final Map<String, int> unreadCounts;
   final Map<String, DateTime> typing;
   final List<String> blockedBy;
+  final String groupPhotoUrl;
+  final DateTime? groupTimeoutUntil;
 
   factory ChatRoom.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -66,6 +70,8 @@ class ChatRoom {
       unreadCounts: unreadCounts,
       typing: typing,
       blockedBy: List<String>.from(data['blockedBy'] as List? ?? []),
+      groupPhotoUrl: data['groupPhotoUrl'] as String? ?? '',
+      groupTimeoutUntil: (data['groupTimeoutUntil'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -91,6 +97,15 @@ class ChatRoom {
   }
 
   bool isAdmin(String userId) => effectiveAdminIds.contains(userId);
+
+  bool isGroupTimedOut([DateTime? now]) {
+    final until = groupTimeoutUntil;
+    if (until == null) return false;
+    return until.isAfter(now ?? DateTime.now());
+  }
+
+  String? get visibleGroupPhotoUrl =>
+      groupPhotoUrl.startsWith('http') ? groupPhotoUrl : null;
 
   bool isBlocked() => blockedBy.isNotEmpty;
 

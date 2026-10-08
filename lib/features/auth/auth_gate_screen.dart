@@ -1,12 +1,17 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/moderation_model.dart';
+import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
+import '../../services/force_lock_service.dart';
 import '../../services/moderation_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/outgoing_queue_service.dart';
 import '../../services/presence_service.dart';
 import '../../services/settings_service.dart';
 import '../chat/secret_hub_screen.dart';
@@ -23,6 +28,8 @@ class AuthGateScreen extends StatefulWidget {
 
 class _AuthGateScreenState extends State<AuthGateScreen> {
   PresenceService? _presenceService;
+  StreamSubscription<AppUser?>? _quickEmojiSub;
+  String? _quickEmojiUid;
 
   @override
   void initState() {
@@ -40,6 +47,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
       DeviceOrientation.landscapeRight,
     ]);
     _presenceService?.stop();
+    _quickEmojiSub?.cancel();
     try {
       context.read<NotificationService>().setHubOpen(false);
     } catch (_) {}
@@ -64,6 +72,8 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
         if (user == null) {
           _presenceService?.stop();
           _presenceService = null;
+          _stopQuickEmojis();
+          context.read<OutgoingQueueService>().unbind();
           context.read<NotificationService>().setHubOpen(false);
           return const LoginScreen();
         }
@@ -71,6 +81,8 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
         if (authService.requiresEmailVerification) {
           _presenceService?.stop();
           _presenceService = null;
+          _stopQuickEmojis();
+          context.read<OutgoingQueueService>().unbind();
           context.read<NotificationService>().setHubOpen(false);
           return const EmailVerifyScreen();
         }
@@ -78,11 +90,31 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
         _presenceService ??= PresenceService(
           settings: context.read<SettingsService>(),
         )..start();
+        _watchQuickEmojis(user.uid);
+        unawaited(context.read<OutgoingQueueService>().bind(user.uid));
         context.read<NotificationService>().setHubOpen(true);
 
         return _verifiedHome(context, user);
       },
     );
+  }
+
+  void _stopQuickEmojis() {
+    _quickEmojiSub?.cancel();
+    _quickEmojiSub = null;
+    _quickEmojiUid = null;
+  }
+
+  void _watchQuickEmojis(String uid) {
+    if (_quickEmojiUid == uid) return;
+    _quickEmojiSub?.cancel();
+    _quickEmojiUid = uid;
+    final settings = context.read<SettingsService>();
+    _quickEmojiSub = context.read<AuthService>().watchUser(uid).listen((user) {
+      final emojis = user?.quickEmojis;
+      if (emojis == null || emojis.isEmpty) return;
+      settings.applyFavoriteEmojis(emojis);
+    });
   }
 
   Widget _verifiedHome(BuildContext context, User user) {
@@ -91,6 +123,17 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
       _presenceService?.stop();
       _presenceService = null;
       Navigator.of(context).popUntil((route) => route.isFirst);
+    }
+
+    final force = context.watch<ForceLockService>();
+    if (force.trip) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final service = context.read<ForceLockService>();
+        service.consumeTrip();
+        unawaited(service.clearPending());
+        exitToCalculator();
+      });
     }
 
     final hub = SecretHubScreen(onExitToCalculator: exitToCalculator);

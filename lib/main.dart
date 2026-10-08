@@ -8,10 +8,12 @@ import 'app.dart';
 import 'firebase_options.dart';
 import 'services/auth_service.dart';
 import 'services/chat_service.dart';
+import 'services/force_lock_service.dart';
 import 'services/notification_service.dart';
 import 'services/nudge_haptic.dart';
 import 'services/nudge_service.dart';
 import 'services/settings_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -19,6 +21,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   if (message.data['type'] == 'nudge' && NudgeHaptic.isFresh(message.sentTime)) {
     await NudgeHaptic.play();
+  }
+  if (message.data['type'] == 'forceLock') {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(ForceLockService.pendingKey, true);
   }
 }
 
@@ -41,6 +47,10 @@ Future<void> main() async {
     authService: authService,
     chatService: chatService,
   );
+  final forceLockService = ForceLockService(
+    authService: authService,
+    chatService: chatService,
+  );
 
   runApp(
     HesapMakinesiApp(
@@ -49,8 +59,10 @@ Future<void> main() async {
       chatService: chatService,
       notificationService: notificationService,
       nudgeService: nudgeService,
+      forceLockService: forceLockService,
     ),
   );
   unawaited(notificationService.start());
   nudgeService.start();
+  forceLockService.start();
 }

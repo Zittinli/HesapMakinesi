@@ -6,6 +6,9 @@ import '../../models/chat_model.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/storage_service.dart';
+import '../../widgets/profile_avatar.dart';
+import '../settings/profile_photo_picker.dart';
 
 class GroupDetailsScreen extends StatefulWidget {
   const GroupDetailsScreen({super.key, required this.chatId});
@@ -41,6 +44,23 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _changePhoto(ChatRoom chat) async {
+    final storage = context.read<StorageService>();
+    final chats = context.read<ChatService>();
+    final file = await pickProfilePhoto(context);
+    if (file == null || !mounted) return;
+    await _run(() async {
+      final url = await storage.uploadProfilePhoto(
+            folder: 'group_photos/${chat.id}',
+            file: file,
+          );
+      await chats.setGroupPhotoUrl(
+            chatId: chat.id,
+            url: url,
+          );
+    });
   }
 
   Future<void> _rename(ChatRoom chat) async {
@@ -257,6 +277,12 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
                 actions: [
                   if (canManage)
                     IconButton(
+                      tooltip: 'Grup fotoğrafı',
+                      onPressed: _busy ? null : () => _changePhoto(chat),
+                      icon: const Icon(Icons.photo_camera_outlined),
+                    ),
+                  if (canManage)
+                    IconButton(
                       tooltip: 'Grup adını değiştir',
                       onPressed: _busy ? null : () => _rename(chat),
                       icon: const Icon(Icons.edit_outlined),
@@ -272,8 +298,22 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
               body: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
                 children: [
+                  Center(
+                    child: GestureDetector(
+                      onTap: canManage && !_busy
+                          ? () => _changePhoto(chat)
+                          : null,
+                      child: ProfileAvatar(
+                        name: chat.groupName,
+                        photoUrl: chat.visibleGroupPhotoUrl,
+                        radius: 40,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   Text(
                     chat.groupName,
+                    textAlign: TextAlign.center,
                     style: const TextStyle(color: Colors.white, fontSize: 22),
                   ),
                   const SizedBox(height: 6),
@@ -294,12 +334,11 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
                     final admin = chat.isAdmin(user.id);
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: CircleAvatar(
-                        backgroundColor: const Color(0xFF242424),
-                        child: Text(
-                          user.visibleName.characters.first.toUpperCase(),
-                          style: const TextStyle(color: Colors.white70),
-                        ),
+                      leading: ProfileAvatar(
+                        name: user.visibleName,
+                        photoUrl: user.visiblePhotoUrl,
+                        hidden: user.photoHidden,
+                        radius: 20,
                       ),
                       title: Text(
                         user.visibleName,

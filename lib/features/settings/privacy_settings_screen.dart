@@ -52,6 +52,20 @@ class PrivacySettingsScreen extends StatelessWidget {
           const _IdleTimeoutField(),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            value: settings.skipCalculator,
+            onChanged: settings.setSkipCalculator,
+            title: const Text(
+              'Hesap makinesini atla',
+              style: TextStyle(color: Colors.white70),
+            ),
+            subtitle: const Text(
+              'Güvenli ortamda doğrudan sohbete gir.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+            activeColor: Colors.white70,
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             value: settings.screenProtectionEnabled,
             onChanged: settings.setScreenProtectionEnabled,
             title: const Text(

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -10,10 +11,12 @@ class MediaViewerScreen extends StatefulWidget {
     super.key,
     required this.url,
     required this.isVideo,
+    this.file,
   });
 
   final String url;
   final bool isVideo;
+  final File? file;
 
   @override
   State<MediaViewerScreen> createState() => _MediaViewerScreenState();
@@ -33,9 +36,10 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     if (widget.isVideo) {
-      final controller = VideoPlayerController.networkUrl(
-        Uri.parse(widget.url),
-      );
+      final local = widget.file;
+      final controller = local != null
+          ? VideoPlayerController.file(local)
+          : VideoPlayerController.networkUrl(Uri.parse(widget.url));
       _video = controller;
       controller.addListener(_onVideoChanged);
       controller
@@ -189,19 +193,22 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
   }
 
   Widget _buildImage() {
+    final local = widget.file;
     return InteractiveViewer(
       minScale: 0.8,
       maxScale: 5,
-      child: CachedNetworkImage(
-        imageUrl: widget.url,
-        fit: BoxFit.contain,
-        placeholder: (_, __) =>
-            const CircularProgressIndicator(color: Colors.white24),
-        errorWidget: (_, __, ___) => const Text(
-          'Fotoğraf açılamadı.',
-          style: TextStyle(color: Colors.white54),
-        ),
-      ),
+      child: local != null
+          ? Image.file(local, fit: BoxFit.contain)
+          : CachedNetworkImage(
+              imageUrl: widget.url,
+              fit: BoxFit.contain,
+              placeholder: (_, __) =>
+                  const CircularProgressIndicator(color: Colors.white24),
+              errorWidget: (_, __, ___) => const Text(
+                'Fotoğraf açılamadı.',
+                style: TextStyle(color: Colors.white54),
+              ),
+            ),
     );
   }
 

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -17,14 +19,19 @@ import '../../models/report_model.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/force_lock_service.dart';
 import '../../services/moderation_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/nudge_service.dart';
+import '../../services/outgoing_queue_service.dart';
 import '../../services/settings_service.dart';
 import '../../services/storage_service.dart';
 import 'chat_search_screen.dart';
+import 'force_lock_button.dart';
 import 'group_details_screen.dart';
 import 'media_capture_screen.dart';
 import 'media_viewer_screen.dart';
+import 'message_actions.dart';
 import 'message_bubble.dart';
 import 'reply_swipe.dart';
 import 'typing_bubble.dart';
@@ -66,8 +73,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _typingDebounce;
   Timer? _readDebounce;
   bool _isSending = false;
-  bool _mediaUploading = false;
-  bool _sendingText = false;
   bool _didInitialAlign = false;
   final List<ChatMessage> _pendingOutgoing = [];
   Timer? _idleTimer;
@@ -86,13 +91,21 @@ class _ChatScreenState extends State<ChatScreen> {
   Stream<AppUser?>? _otherUserStream;
   ChatService? _chatService;
   SettingsService? _settingsService;
+  OutgoingQueueService? _queue;
+  bool _queueHooked = false;
   String? _myUid;
+  String? _sessionUnreadId;
   String? _highlightedMessageId;
   String? _pendingJumpId;
   bool _initialMessageHandled = false;
   final Map<String, GlobalKey> _messageKeys = {};
+  final Map<String, String> _clientKeys = {};
   final Map<String, Future<AppUser?>> _userFutures = {};
   bool _showJumpDown = false;
+  final Set<String> _downloadingMediaIds = {};
+  final Set<String> _selectedMessageIds = {};
+  String? _notice;
+  Timer? _noticeTimer;
   bool _loadingOlder = false;
   bool _hasMoreMessages = true;
 
@@ -109,6 +122,12 @@ class _ChatScreenState extends State<ChatScreen> {
     _myUid = uid;
     final myEmail = authService.currentUser?.email ?? '';
     _prefsStream ??= chatService.watchChatPrefs(uid);
+    if (!_queueHooked) {
+      _queueHooked = true;
+      _queue = context.read<OutgoingQueueService>();
+      _queue!.addListener(_pullQueue);
+      _pullQueue();
+    }
     if (widget.chatId.isNotEmpty) {
       _chatStream ??= chatService.watchChat(widget.chatId);
     }
@@ -130,11 +149,19 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.addListener(_onComposerChanged);
     _focusNode.addListener(_onComposerFocus);
     _scrollController.addListener(_onScrollOffset);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _bumpIdle());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _bumpIdle();
+      if (widget.chatId.isNotEmpty) {
+        unawaited(
+          context.read<NotificationService>().cancelChat(widget.chatId),
+        );
+      }
+    });
   }
 
   @override
   void dispose() {
+    _queue?.removeListener(_pullQueue);
     _idleTimer?.cancel();
     _typingDebounce?.cancel();
     _readDebounce?.cancel();
@@ -144,6 +171,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollController.removeListener(_onScrollOffset);
     _scrollController.dispose();
     _focusNode.dispose();
+    _noticeTimer?.cancel();
     _setTyping(false);
     super.dispose();
   }
@@ -228,12 +256,24 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool _fastIdleTicks = false;
+  bool _idlePausedForRoute = false;
 
   void _armIdleTimer({bool fast = false}) {
     _fastIdleTicks = fast;
     _idleTimer?.cancel();
     _idleTimer = Timer.periodic(Duration(milliseconds: fast ? 80 : 1000), (_) {
       if (!mounted) return;
+      final route = ModalRoute.of(context);
+      if (route != null && !route.isCurrent) {
+        _idlePausedForRoute = true;
+        return;
+      }
+      if (_idlePausedForRoute) {
+        _idlePausedForRoute = false;
+        _refreshIdleDeadline();
+        _armIdleTimer();
+        return;
+      }
       final deadline = _idleDeadline;
       if (deadline == null) return;
       if (DateTime.now().isAfter(deadline)) {
@@ -250,115 +290,166 @@ class _ChatScreenState extends State<ChatScreen> {
 
   double get _idleWarningProgress => IdleWarningLook.progress(_idleDeadline);
 
+  void _showNotice(String text) {
+    _noticeTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _notice = text);
+    _noticeTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      setState(() => _notice = null);
+    });
+  }
+
+  void _dismissNotice() {
+    _noticeTimer?.cancel();
+    if (_notice == null || !mounted) return;
+    setState(() => _notice = null);
+  }
+
+  void _pullQueue() {
+    if (!mounted) return;
+    final queue = _queue;
+    if (queue == null) return;
+    setState(() {
+      _pendingOutgoing
+        ..clear()
+        ..addAll(
+          queue
+              .jobsFor(
+                chatId: widget.chatId,
+                pendingEmail: widget.pendingEmail,
+              )
+              .map((job) => job.toMessage()),
+        );
+    });
+  }
+
   Future<void> _sendText() async {
     final text = _messageController.text.trim();
-    if (text.isEmpty || _sendingText) return;
+    if (text.isEmpty) return;
 
     final currentUser = context.read<AuthService>().currentUser!;
+    final queue = context.read<OutgoingQueueService>();
+    final moderation = context.read<ModerationService>();
     try {
-      await context.read<ModerationService>().ensureNotRestricted(
+      await moderation.ensureNotRestricted(
         currentUser.uid,
         currentUser.email ?? '',
       );
     } on AccountRestrictedException catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.message)));
+        _showNotice(error.message);
       }
       return;
     }
+    if (!mounted) return;
 
     final editing = _editingMessage;
     if (editing != null) {
       await _saveEdit(editing, text);
       return;
     }
-
-    _messageController.clear();
     final reply = _replyTo;
     final ttl = _expireSeconds;
-    final now = DateTime.now();
-    final pending = ChatMessage(
-      id: 'local-${now.microsecondsSinceEpoch}',
-      senderId: _myUid!,
-      text: text,
-      createdAt: now,
-      readBy: [_myUid!],
-      replyToId: reply?.id,
-      replyToText: reply?.preview,
-      replyToSenderId: reply?.senderId,
-      expireSeconds: ttl,
-      expiresAt: ttl == null ? null : now.add(Duration(seconds: ttl)),
-    );
-    setState(() {
-      _sendingText = true;
-      _replyTo = null;
-      _pendingOutgoing.add(pending);
-    });
-    _bumpIdle();
-
-    try {
-      final currentUserId = _myUid!;
-      final chatService = _chatService!;
-      if (widget.chatId.isEmpty && (widget.pendingEmail ?? '').isNotEmpty) {
-        await chatService.sendPendingText(
-          senderId: currentUserId,
-          recipientEmail: widget.pendingEmail!,
-          text: text,
-          replyTo: reply,
-          expireSeconds: ttl,
-        );
-      } else {
-        await chatService.sendTextMessage(
-          chatId: widget.chatId,
-          senderId: currentUserId,
-          text: text,
-          replyTo: reply,
-          expireSeconds: ttl,
-        );
-      }
-      _typingSent = false;
-      if (!_showJumpDown) _scrollToBottom();
-    } on ChatBlockedException catch (error) {
-      _dropPending(pending.id);
-      if (mounted) {
-        setState(() {
-          _replyTo = reply;
-          _messageController.text = text;
-        });
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.message)));
-      }
-    } catch (error, stackTrace) {
-      debugPrint('HM_SEND_FAILED: $error\n$stackTrace');
-      _dropPending(pending.id);
-      if (mounted) {
-        setState(() {
-          _replyTo = reply;
-          _messageController.text = text;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Mesaj gönderilemedi. Tekrar deneyin.')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _sendingText = false);
+    _messageController.clear();
+    if (mounted) {
+      setState(() => _replyTo = null);
     }
-  }
-
-  void _dropPending(String id) {
-    if (!mounted) return;
-    setState(() => _pendingOutgoing.removeWhere((item) => item.id == id));
+    _typingSent = false;
+    _bumpIdle();
+    if (!_showJumpDown) _scrollToBottom();
+    await queue.enqueueText(
+      senderId: currentUser.uid,
+      text: text,
+      chatId: widget.chatId,
+      pendingEmail: widget.pendingEmail ?? '',
+      replyTo: reply,
+      expireSeconds: ttl,
+    );
   }
 
   Future<void> _captureMedia() async {
+    _holdIdleWhileTyping();
     final captured = await Navigator.of(context).push<CapturedMedia>(
       MaterialPageRoute(builder: (_) => const MediaCaptureScreen()),
     );
     if (captured == null || !mounted) return;
     await _sendMedia(captured);
+  }
+
+  Future<void> _pickGalleryMedia() async {
+    _holdIdleWhileTyping();
+    try {
+      final picked = await ImagePicker().pickMultipleMedia();
+      if (!mounted || picked.isEmpty) return;
+      for (final raw in picked) {
+        if (!mounted) return;
+        final path = raw.path;
+        final isVideo = _galleryFileIsVideo(raw);
+        await _sendMedia(
+          CapturedMedia(
+            file: File(path),
+            isVideo: isVideo,
+            contentType: isVideo
+                ? 'video/mp4'
+                : (raw.mimeType ?? 'image/jpeg'),
+          ),
+          fileName: path.split(Platform.pathSeparator).last,
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        _showNotice('Galeri açılamadı.');
+      }
+    }
+  }
+
+  bool _galleryFileIsVideo(XFile file) {
+    final path = file.path.toLowerCase();
+    final mime = (file.mimeType ?? '').toLowerCase();
+    return mime.startsWith('video/') ||
+        path.endsWith('.mp4') ||
+        path.endsWith('.mov') ||
+        path.endsWith('.mkv') ||
+        path.endsWith('.webm');
+  }
+
+  Future<void> _shareLocation() async {
+    final enabled = await Geolocator.isLocationServiceEnabled();
+    if (!enabled) {
+      if (mounted) {
+        _showNotice('Konum kapalı. Ayarlardan aç.');
+      }
+      await Geolocator.openLocationSettings();
+      return;
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      if (mounted) {
+        _showNotice('Konum izni yok.');
+      }
+      return;
+    }
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 12),
+        ),
+      );
+      final link =
+          'https://maps.google.com/?q=${pos.latitude},${pos.longitude}';
+      _messageController.text = link;
+      await _sendText();
+    } catch (_) {
+      if (mounted) {
+        _showNotice('Konum alınamadı.');
+      }
+    }
   }
 
   Future<void> _pickAndSendFile() async {
@@ -372,9 +463,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final path = picked.path;
       if (path == null || path.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Dosya açılamadı.')),
-          );
+          _showNotice('Dosya açılamadı.');
         }
         return;
       }
@@ -394,9 +483,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (error) {
       debugPrint('HM_FILE_PICK_FAILED: $error');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Dosya seçilemedi.')),
-        );
+        _showNotice('Dosya seçilemedi.');
       }
     }
   }
@@ -432,73 +519,30 @@ class _ChatScreenState extends State<ChatScreen> {
     int? fileSize,
     bool asFile = false,
   }) async {
-    if (_mediaUploading) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Önceki medya arka planda yükleniyor.')),
-      );
-    }
-    setState(() => _mediaUploading = true);
-    try {
-      final uid = _myUid!;
-      final folder = widget.chatId.isNotEmpty
-          ? 'chat_media/${widget.chatId}'
-          : 'pending_media/${ChatService.emailKey(widget.pendingEmail ?? uid)}';
-      final url = await context.read<StorageService>().uploadChatMedia(
-        folder: folder,
-        file: captured.file,
-        contentType: captured.contentType,
-        fileName: fileName,
-      );
-      final type = asFile
-          ? MessageType.file
-          : captured.isVideo
-          ? MessageType.video
-          : MessageType.image;
-      final size = fileSize ?? await captured.file.length();
-      final chatService = _chatService!;
-      if (widget.chatId.isEmpty && (widget.pendingEmail ?? '').isNotEmpty) {
-        await chatService.sendPendingMedia(
-          senderId: uid,
-          recipientEmail: widget.pendingEmail!,
-          mediaUrl: url,
-          type: type,
-          replyTo: _replyTo,
-          expireSeconds: _expireSeconds,
-          fileName: fileName,
-          fileSize: size,
-          fileMime: captured.contentType,
-        );
-      } else {
-        await chatService.sendMediaMessage(
-          chatId: widget.chatId,
-          senderId: uid,
-          mediaUrl: url,
-          type: type,
-          replyTo: _replyTo,
-          expireSeconds: _expireSeconds,
-          fileName: fileName,
-          fileSize: size,
-          fileMime: captured.contentType,
-        );
-      }
-      if (mounted) setState(() => _replyTo = null);
-      if (!_showJumpDown) _scrollToBottom();
-    } on MediaUploadException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.message)));
-      }
-    } catch (error, stackTrace) {
-      debugPrint('HM_MEDIA_UPLOAD_FAILED: $error\n$stackTrace');
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Medya gönderilemedi.')));
-      }
-    } finally {
-      if (mounted) setState(() => _mediaUploading = false);
-    }
+    final uid = _myUid!;
+    final queue = context.read<OutgoingQueueService>();
+    final type = asFile
+        ? MessageType.file
+        : captured.isVideo
+        ? MessageType.video
+        : MessageType.image;
+    final reply = _replyTo;
+    final ttl = _expireSeconds;
+    if (mounted) setState(() => _replyTo = null);
+    _bumpIdle();
+    if (!_showJumpDown) _scrollToBottom();
+    await queue.enqueueMedia(
+      senderId: uid,
+      chatId: widget.chatId,
+      file: captured.file,
+      type: type,
+      contentType: captured.contentType,
+      pendingEmail: widget.pendingEmail ?? '',
+      replyTo: reply,
+      expireSeconds: ttl,
+      fileName: fileName,
+      fileSize: fileSize,
+    );
   }
 
   Future<void> _showPersonDetails() async {
@@ -565,6 +609,69 @@ class _ChatScreenState extends State<ChatScreen> {
                       );
                     },
                   ),
+                  StreamBuilder<bool>(
+                    stream: context.read<ChatService>().watchForceLockAllowed(
+                      ownerId: _myUid ?? '',
+                      peerId: widget.otherUserId,
+                    ),
+                    builder: (context, snapshot) {
+                      final allowed = snapshot.data == true;
+                      return SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: allowed,
+                        activeColor: Colors.white70,
+                        title: const Text(
+                          'Beni hesap makinesine gönderebilir',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                        onChanged: (value) async {
+                          try {
+                            await context.read<ChatService>().setForceLockAllow(
+                              userId: _myUid ?? '',
+                              peerId: widget.otherUserId,
+                              chatId: widget.chatId,
+                              allow: value,
+                            );
+                          } catch (_) {
+                            if (!context.mounted) return;
+                            _showNotice(
+                              'Anahtar kaydedilemedi. Kuralları yayınlamak gerekebilir.',
+                            );
+                          }
+                        },
+                      );
+                    },
+                  ),
+                  StreamBuilder<bool>(
+                    stream: context.read<ChatService>().watchForceLockAllowed(
+                      ownerId: widget.otherUserId,
+                      peerId: _myUid ?? '',
+                    ),
+                    builder: (context, snapshot) {
+                      if (snapshot.data != true) {
+                        return const SizedBox.shrink();
+                      }
+                      return Align(
+                        alignment: Alignment.centerLeft,
+                        child: ForceLockButton(
+                          onPressed: () async {
+                            Navigator.pop(context);
+                            try {
+                              await context.read<ForceLockService>().send(
+                                toId: widget.otherUserId,
+                                chatId: widget.chatId,
+                              );
+                            } catch (error) {
+                              if (!mounted) return;
+                              _showNotice(
+                                error.toString().replaceFirst('Bad state: ', ''),
+                              );
+                            }
+                          },
+                        ),
+                      );
+                    },
+                  ),
                 ],
               ],
             ),
@@ -586,8 +693,26 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  bool _canEdit(ChatMessage message) {
+    return widget.chatId.isNotEmpty &&
+        message.senderId == _myUid &&
+        !message.pendingWrite &&
+        !message.id.startsWith('local-') &&
+        !message.hasMedia &&
+        !message.hasFile &&
+        !message.deletedForEveryone &&
+        !message.isExpired();
+  }
+
+  ChatMessage? _loneEditableMessage() {
+    final selected = _selectedMessages();
+    if (selected.length != 1) return null;
+    final message = selected.single;
+    return _canEdit(message) ? message : null;
+  }
+
   Future<void> _saveEdit(ChatMessage message, String text) async {
-    if (widget.chatId.isEmpty || _isSending) return;
+    if (!_canEdit(message) || _isSending) return;
     setState(() => _isSending = true);
     try {
       await context.read<ChatService>().editMessage(
@@ -602,9 +727,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Mesaj düzenlenemedi. Tekrar deneyin.')),
-        );
+        _showNotice('Mesaj düzenlenemedi. Tekrar deneyin.');
       }
     } finally {
       if (mounted) setState(() => _isSending = false);
@@ -727,9 +850,12 @@ class _ChatScreenState extends State<ChatScreen> {
     _pendingJumpId = messageId;
     _showJumpDown = true;
 
+    bool matches(ChatMessage message) =>
+        message.id == messageId || message.clientKey == messageId;
+
     var merged = _mergeMessages(messages);
     var guard = 0;
-    while (!merged.any((message) => message.id == messageId) &&
+    while (!merged.any(matches) &&
         _hasMoreMessages &&
         guard < 24) {
       final loaded = await _loadOlderMessages();
@@ -738,7 +864,7 @@ class _ChatScreenState extends State<ChatScreen> {
       guard += 1;
     }
 
-    if (!merged.any((message) => message.id == messageId) &&
+    if (!merged.any(matches) &&
         widget.chatId.isNotEmpty) {
       final message = await _chatService!.getMessage(
         chatId: widget.chatId,
@@ -754,13 +880,20 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     if (!mounted) return;
-    if (!merged.any((message) => message.id == messageId)) {
+    final target = merged.cast<ChatMessage?>().firstWhere(
+      (message) => message != null && matches(message),
+      orElse: () => null,
+    );
+    if (target == null) {
       _pendingJumpId = null;
       return;
     }
 
-    setState(() => _highlightedMessageId = messageId);
-    await _ensureMessageVisible(messageId, merged);
+    setState(() => _highlightedMessageId = target.id);
+    await _ensureMessageVisible(target.id, merged);
+    if (target.clientKey != null && target.clientKey != target.id) {
+      await _ensureMessageVisible(target.clientKey!, merged);
+    }
     if (mounted) _pendingJumpId = null;
   }
 
@@ -769,7 +902,9 @@ class _ChatScreenState extends State<ChatScreen> {
     List<ChatMessage> messages,
   ) async {
     final reversed = messages.reversed.toList();
-    final index = reversed.indexWhere((message) => message.id == messageId);
+    final index = reversed.indexWhere(
+      (message) => message.id == messageId || message.clientKey == messageId,
+    );
     if (index < 0) return;
 
     for (var attempt = 0; attempt < 12; attempt++) {
@@ -818,16 +953,68 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  bool _pendingCoveredBy(ChatMessage pending, List<ChatMessage> server) {
-    return server.any((message) {
-      if (message.id.startsWith('local-')) return false;
-      if (message.senderId != pending.senderId) return false;
-      if (message.text != pending.text) return false;
-      final a = message.createdAt;
-      final b = pending.createdAt;
-      if (a == null || b == null) return true;
-      return a.difference(b).abs() <= const Duration(seconds: 20);
+  bool _isSameOutgoing(ChatMessage pending, ChatMessage server) {
+    if (server.id.startsWith('local-')) return false;
+    if (pending.senderId != server.senderId) return false;
+    if (pending.text != server.text) return false;
+    if (pending.type != server.type) return false;
+    final a = server.createdAt;
+    final b = pending.createdAt;
+    if (a == null || b == null) return true;
+    return a.difference(b).abs() <= const Duration(seconds: 20);
+  }
+
+  bool _pendingSyncedBy(ChatMessage pending, List<ChatMessage> server) {
+    return server.any(
+      (message) => _isSameOutgoing(pending, message) && !message.pendingWrite,
+    );
+  }
+
+  List<ChatMessage> _withOutgoingDrafts(
+    List<ChatMessage> visible,
+    List<ChatMessage> drafts,
+  ) {
+    if (drafts.isEmpty) {
+      return [
+        for (final message in visible)
+          message.copyWith(clientKey: _clientKeys[message.id] ?? message.clientKey),
+      ];
+    }
+    final hiddenIds = <String>{};
+    final promoted = <String, ChatMessage>{};
+    for (final message in visible) {
+      ChatMessage? draft;
+      for (final item in drafts) {
+        if (_isSameOutgoing(item, message)) {
+          draft = item;
+          break;
+        }
+      }
+      if (draft == null) continue;
+      hiddenIds.add(message.id);
+      if (!message.pendingWrite) {
+        final key = draft.clientKey ?? draft.id;
+        _clientKeys[message.id] = key;
+        promoted[draft.id] = message.copyWith(
+          pendingWrite: false,
+          clientKey: key,
+        );
+      }
+    }
+    final result = <ChatMessage>[
+      for (final message in visible)
+        if (!hiddenIds.contains(message.id))
+          message.copyWith(
+            clientKey: _clientKeys[message.id] ?? message.clientKey,
+          ),
+      for (final draft in drafts) promoted[draft.id] ?? draft,
+    ];
+    result.sort((a, b) {
+      final at = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return at.compareTo(bt);
     });
+    return result;
   }
 
   String? _firstUnreadIdOf(List<ChatMessage> messages, String uid) {
@@ -846,7 +1033,9 @@ class _ChatScreenState extends State<ChatScreen> {
           a[i].text != b[i].text ||
           a[i].readBy.length != b[i].readBy.length ||
           a[i].editedAt != b[i].editedAt ||
-          a[i].reactions.length != b[i].reactions.length) {
+          a[i].reactions.length != b[i].reactions.length ||
+          a[i].downloadedBy.length != b[i].downloadedBy.length ||
+          a[i].pendingWrite != b[i].pendingWrite) {
         return false;
       }
     }
@@ -865,15 +1054,13 @@ class _ChatScreenState extends State<ChatScreen> {
     if (widget.chatId.isEmpty) {
       return 'Çevrimdışı iletilecek';
     }
-    if (settings.typingEnabled &&
-        chat != null &&
-        chat.isOtherTyping(widget.otherUserId)) {
-      return 'Yazıyor...';
-    }
     if (!settings.lastSeenEnabled) return '';
     if (user == null) return '';
     if (!user.shareLastSeen) return '';
-    return ChatFormat.lastSeenLabel(user.lastSeen, isOnline: user.isOnline);
+    return ChatFormat.lastSeenLabel(
+      user.lastSeen,
+      isOnline: user.isEffectivelyOnline(),
+    );
   }
 
   void _cycleTtl() {
@@ -906,11 +1093,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(error.toString().replaceFirst('Bad state: ', '')),
-        ),
-      );
+      _showNotice(error.toString().replaceFirst('Bad state: ', ''));
     }
   }
 
@@ -1003,9 +1186,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }) async {
     if (widget.chatId.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Bekleyen mesaj henüz silinemiyor.')),
-        );
+        _showNotice('Bekleyen mesaj henüz silinemiyor.');
       }
       return;
     }
@@ -1028,11 +1209,79 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Mesaj silinemedi. Tekrar deneyin.')),
-        );
+        _showNotice('Mesaj silinemedi. Tekrar deneyin.');
       }
     }
+  }
+
+  bool _canSelect(ChatMessage message) {
+    return widget.chatId.isNotEmpty &&
+        message.id.isNotEmpty &&
+        !message.pendingWrite &&
+        !message.id.startsWith('local-');
+  }
+
+  void _toggleMessageSelection(ChatMessage message) {
+    if (!_canSelect(message)) return;
+    setState(() {
+      if (!_selectedMessageIds.add(message.id)) {
+        _selectedMessageIds.remove(message.id);
+      }
+    });
+  }
+
+  void _clearMessageSelection() {
+    if (_selectedMessageIds.isEmpty) return;
+    setState(() => _selectedMessageIds.clear());
+  }
+
+  List<ChatMessage> _selectedMessages() {
+    final byId = <String, ChatMessage>{
+      for (final message in _lastMarkedMessages) message.id: message,
+    };
+    final selected = [
+      for (final id in _selectedMessageIds)
+        if (byId[id] != null) byId[id]!,
+    ];
+    selected.sort((a, b) {
+      final at = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final order = at.compareTo(bt);
+      if (order != 0) return order;
+      return a.id.compareTo(b.id);
+    });
+    return selected;
+  }
+
+  Future<void> _copySelectedMessages() async {
+    final parts = <String>[];
+    for (final message in _selectedMessages()) {
+      final body = message.text.trim().isNotEmpty
+          ? message.text.trim()
+          : message.preview.trim();
+      if (body.isEmpty) continue;
+      parts.add(body);
+    }
+    if (parts.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: parts.join('\n\n')));
+    if (!mounted) return;
+    _clearMessageSelection();
+    _showNotice('Mesajlar kopyalandı.');
+  }
+
+  Future<void> _deleteSelectedMessages() async {
+    final targets = _selectedMessages();
+    if (targets.isEmpty) return;
+    final ok = await _confirm(
+      targets.length == 1
+          ? 'Bu mesaj senden silinsin mi?'
+          : '${targets.length} mesaj senden silinsin mi?',
+    );
+    if (ok != true || !mounted) return;
+    for (final message in targets) {
+      await _deleteMessage(message, forEveryone: false);
+    }
+    if (mounted) _clearMessageSelection();
   }
 
   Future<ReportReason?> _askReportReason() {
@@ -1083,11 +1332,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _reportUser() async {
     if (widget.chatId.isEmpty || widget.otherUserId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Bu kayıt henüz aktif değil, kişi bildirilemez.'),
-        ),
-      );
+      _showNotice('Bu kayıt henüz aktif değil, kişi bildirilemez.');
       return;
     }
 
@@ -1107,16 +1352,10 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await send();
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Bildirim gönderildi.')));
+      _showNotice('Bildirim gönderildi.');
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Bildirim gönderilemedi. Tekrar deneyin.'),
-        ),
-      );
+      _showNotice('Bildirim gönderilemedi. Tekrar deneyin.');
     }
   }
 
@@ -1210,15 +1449,11 @@ class _ChatScreenState extends State<ChatScreen> {
         memberId: message.senderId,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Kullanıcı gruptan çıkarıldı.')),
-        );
+        _showNotice('Kullanıcı gruptan çıkarıldı.');
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        _showNotice('$error');
       }
     }
   }
@@ -1240,230 +1475,164 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _onMessageLongPress(
+  Future<void> _showMessageMenu(
     ChatMessage message,
     bool isMine,
     ChatRoom? chat,
+    BuildContext anchorContext,
   ) async {
-    final favorites = context.read<SettingsService>().favoriteEmojis;
-    await showModalBottomSheet<void>(
+    if (!anchorContext.mounted) return;
+
+    final selected = await showMessageActions(
       context: context,
-      backgroundColor: const Color(0xFF141414),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        Widget item({
-          required IconData icon,
-          required String label,
-          required VoidCallback onTap,
-          Color? color,
-        }) {
-          return ListTile(
-            dense: true,
-            visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
-            minLeadingWidth: 22,
-            leading: Icon(icon, color: color ?? Colors.white70, size: 18),
-            title: Text(
-              label,
-              style: TextStyle(color: color ?? Colors.white70, fontSize: 13.5),
-            ),
-            onTap: onTap,
-          );
+      anchorContext: anchorContext,
+      isMine: isMine,
+      quickEmojis: context.read<SettingsService>().favoriteEmojis,
+      entries: [
+        if (!message.hasMedia && !message.hasFile)
+          const MessageMenuEntry('copy', 'Kopyala'),
+        if (message.hasMedia || message.hasFile)
+          const MessageMenuEntry('download', 'İndir'),
+        const MessageMenuEntry('reply', 'Yanıtla'),
+        if (widget.chatId.isNotEmpty)
+          const MessageMenuEntry('details', 'Ayrıntı'),
+        if (_canEdit(message))
+          const MessageMenuEntry('edit', 'Düzenle'),
+        const MessageMenuEntry('delete_me', 'Benden sil'),
+        if (!isMine && widget.chatId.isNotEmpty)
+          const MessageMenuEntry('report', 'Bildir', color: Color(0xFFFFCC80)),
+        if (!isMine &&
+            chat?.isGroup == true &&
+            chat!.isAdmin(_myUid ?? '') &&
+            !chat.isAdmin(message.senderId))
+          const MessageMenuEntry(
+            'kick',
+            'Gruptan çıkar',
+            color: Color(0xFFFF8A80),
+          ),
+        if (isMine)
+          const MessageMenuEntry(
+            'delete_all',
+            'Herkesten sil',
+            color: Color(0xFFFF8A80),
+          ),
+      ],
+    );
+    if (!mounted || selected == null) return;
+    if (selected == 'edit-quick') {
+      await _editQuickEmojis();
+      return;
+    }
+    if (selected.startsWith('react:')) {
+      await _react(message, selected.substring('react:'.length));
+      return;
+    }
+    switch (selected) {
+      case 'copy':
+        await Clipboard.setData(ClipboardData(text: message.text));
+      case 'download':
+        await _downloadMedia(message);
+      case 'reply':
+        _startReply(message);
+      case 'details':
+        await _showMessageDetails(message);
+      case 'edit':
+        _startEdit(message);
+      case 'delete_me':
+        final deleteMine = await _confirm('Bu mesaj senden silinsin mi?');
+        if (deleteMine == true && mounted) {
+          await _deleteMessage(message, forEveryone: false);
         }
-
-        return SafeArea(
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(top: 8, bottom: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 8, 4),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: [
-                              for (final emoji in favorites)
-                                IconButton(
-                                  visualDensity: VisualDensity.compact,
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    _react(message, emoji);
-                                  },
-                                  icon: Text(emoji, style: const TextStyle(fontSize: 20)),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Emoji seç',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () async {
-                          Navigator.pop(context);
-                          await _pickReaction(message);
-                        },
-                        icon: const Icon(Icons.add_reaction_outlined, color: Colors.white54, size: 20),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1, color: Color(0xFF2A2A2A)),
-                if (!message.hasMedia && !message.hasFile)
-                  item(
-                    icon: Icons.copy,
-                    label: 'Kopyala',
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: message.text));
-                      Navigator.pop(context);
-                    },
-                  ),
-                if (message.hasMedia || message.hasFile)
-                  item(
-                    icon: Icons.download_outlined,
-                    label: 'İndir',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _downloadMedia(message);
-                    },
-                  ),
-                item(
-                  icon: Icons.reply,
-                  label: 'Yanıtla',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _startReply(message);
-                  },
-                ),
-                if (widget.chatId.isNotEmpty)
-                  item(
-                    icon: Icons.info_outline,
-                    label: 'Ayrıntı',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showMessageDetails(message);
-                    },
-                  ),
-                if (isMine &&
-                    widget.chatId.isNotEmpty &&
-                    !message.hasMedia &&
-                    !message.hasFile &&
-                    !message.deletedForEveryone &&
-                    !message.isExpired())
-                  item(
-                    icon: Icons.edit_outlined,
-                    label: 'Düzenle',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _startEdit(message);
-                    },
-                  ),
-                item(
-                  icon: Icons.delete_outline,
-                  label: 'Benden sil',
-                  onTap: () async {
-                    Navigator.pop(context);
-                    await _deleteMessage(message, forEveryone: false);
-                  },
-                ),
-                if (!isMine && widget.chatId.isNotEmpty)
-                  item(
-                    icon: Icons.flag_outlined,
-                    label: 'Bildir',
-                    color: const Color(0xFFFFCC80),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _reportMessage(message);
-                    },
-                  ),
-                if (!isMine &&
-                    chat?.isGroup == true &&
-                    chat!.isAdmin(_myUid ?? '') &&
-                    !chat.isAdmin(message.senderId))
-                  item(
-                    icon: Icons.person_remove_outlined,
-                    label: 'Gruptan çıkar',
-                    color: const Color(0xFFFF8A80),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _removeMessageSender(chat, message);
-                    },
-                  ),
-                if (isMine)
-                  item(
-                    icon: Icons.delete_forever_outlined,
-                    label: 'Herkesten sil',
-                    color: const Color(0xFFFF8A80),
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await _deleteMessage(message, forEveryone: true);
-                    },
-                  ),
-                const SizedBox(height: 6),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+      case 'report':
+        await _reportMessage(message);
+      case 'kick':
+        final room = chat;
+        if (room != null) await _removeMessageSender(room, message);
+      case 'delete_all':
+        final deleteAll = await _confirm('Bu mesaj herkesten silinsin mi?');
+        if (deleteAll == true && mounted) {
+          await _deleteMessage(message, forEveryone: true);
+        }
+    }
   }
 
-  Future<void> _pickReaction(ChatMessage message) async {
-    const extras = ['🔥', '👏', '🎉', '💯', '👀', '🥰', '😡', '🤔'];
+  Future<void> _editQuickEmojis() async {
     final settings = context.read<SettingsService>();
-    final picked = await showModalBottomSheet<String>(
+    final auth = context.read<AuthService>();
+    await showQuickEmojiEditor(
       context: context,
-      backgroundColor: const Color(0xFF141414),
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final emoji in {...settings.favoriteEmojis, ...extras})
-                  InkWell(
-                    onTap: () => Navigator.pop(context, emoji),
-                    onLongPress: () => settings.toggleFavoriteEmoji(emoji),
-                    child: Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Text(emoji, style: const TextStyle(fontSize: 26)),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
+      selected: settings.favoriteEmojis,
+      onSave: (emojis) async {
+        settings.keepLocalQuickEmojis();
+        await settings.setFavoriteEmojis(emojis);
+        try {
+          await auth.saveQuickEmojis(settings.favoriteEmojis);
+        } catch (error) {
+          settings.keepLocalQuickEmojis();
+          rethrow;
+        }
       },
     );
-    if (picked == null) return;
-    await _react(message, picked);
   }
 
-  void _openMedia(ChatMessage message) {
+  String? _cachedMediaPath(ChatMessage message, SettingsService settings) {
+    final keys = <String>[
+      if (message.isLocalMediaFile) message.mediaUrl ?? '',
+      message.id,
+      message.clientKey ?? '',
+      message.mediaUrl ?? '',
+    ];
+    for (final key in keys) {
+      if (key.isEmpty) continue;
+      if (message.isLocalMediaFile && key == message.mediaUrl) {
+        if (File(key).existsSync()) return key;
+        continue;
+      }
+      final path = settings.mediaFilePath(key);
+      if (path != null && File(path).existsSync()) return path;
+    }
+    return null;
+  }
+
+  Future<void> _openMedia(ChatMessage message) async {
     final url = message.mediaUrl;
     if (url == null || url.isEmpty) return;
     if (message.hasFile) {
-      _downloadMedia(message);
+      await _downloadMedia(message);
       return;
     }
+    final settings = context.read<SettingsService>();
+    final local = _cachedMediaPath(message, settings);
+    final uid = _myUid;
+    final mine = message.senderId == uid;
+    final downloaded = settings.isMediaDownloaded(message.id) ||
+        (uid != null && message.downloadedBy.contains(uid));
+    if (local == null && !mine && !downloaded) {
+      await _downloadMedia(message);
+      return;
+    }
+    if (local == null && !message.isHttpMedia) {
+      await _downloadMedia(message);
+      if (!mounted) return;
+      final cached = _cachedMediaPath(message, context.read<SettingsService>());
+      if (cached == null) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => MediaViewerScreen(
+            url: url,
+            file: File(cached),
+            isVideo: message.type == MessageType.video,
+          ),
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MediaViewerScreen(
           url: url,
+          file: local == null ? null : File(local),
           isVideo: message.type == MessageType.video,
         ),
       ),
@@ -1473,47 +1642,95 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _downloadMedia(ChatMessage message) async {
     final url = message.mediaUrl;
     if (url == null || url.isEmpty) return;
+    final messageId = message.id;
+    if (messageId.isNotEmpty && mounted) {
+      setState(() => _downloadingMediaIds.add(messageId));
+    }
+    final storage = context.read<StorageService>();
+    final settings = context.read<SettingsService>();
     try {
+      var cached = _cachedMediaPath(message, settings);
+      if (cached == null && !message.isLocalMediaFile) {
+        final file = message.hasFile
+            ? await storage.downloadToDocuments(
+                locator: url,
+                fileName: message.fileName ?? 'dosya',
+              )
+            : await storage.downloadToCache(
+                locator: url,
+                messageId: messageId.isEmpty
+                    ? '${DateTime.now().millisecondsSinceEpoch}'
+                    : messageId,
+                fileName: message.fileName,
+              );
+        cached = file.path;
+        await settings.rememberMediaFile(
+          [messageId, message.clientKey ?? '', url],
+          cached,
+        );
+      }
+      if (cached == null) {
+        throw const FileSystemException('Medya dosyası yok.');
+      }
       if (message.hasFile) {
-        final file = await context.read<StorageService>().downloadToDocuments(
-          mediaUrl: url,
-          fileName: message.fileName ?? 'dosya',
-        );
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('İndirildi: ${file.path}')),
-        );
+        await _rememberDownload(message);
+        if (!mounted) return;
+        _showNotice('İndirildi: $cached');
         return;
       }
-      await context.read<StorageService>().downloadToGallery(
-        mediaUrl: url,
+      await storage.saveToGallery(
+        File(cached),
         isVideo: message.type == MessageType.video,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Galeriye indirildi.')));
+      await _rememberDownload(message);
+      if (!mounted) return;
+      _showNotice('Galeriye indirildi.');
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Medya indirilemedi.')));
+      _showNotice('Medya indirilemedi.');
+    } finally {
+      if (mounted && messageId.isNotEmpty) {
+        setState(() => _downloadingMediaIds.remove(messageId));
+      }
     }
+  }
+
+  Future<void> _rememberDownload(ChatMessage message) async {
+    await context.read<SettingsService>().markMediaDownloaded(message.id);
+    final uid = _myUid;
+    if (uid == null || widget.chatId.isEmpty) return;
+    try {
+      await context.read<ChatService>().markMessageDownloaded(
+        chatId: widget.chatId,
+        messageId: message.id,
+        userId: uid,
+      );
+    } catch (_) {}
   }
 
   PopupMenuItem<String> _menuItem(
     String value,
     String label, {
     bool warn = false,
+    bool danger = false,
   }) {
+    final color = danger
+        ? const Color(0xFFFF8A80)
+        : warn
+        ? const Color(0xFFFFCC80)
+        : Colors.white;
     return PopupMenuItem(
       value: value,
-      height: 38,
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
       child: Text(
         label,
         style: TextStyle(
-          color: warn ? const Color(0xFFFFCC80) : Colors.white70,
-          fontSize: 13,
+          color: color,
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
         ),
       ),
     );
@@ -1569,14 +1786,38 @@ class _ChatScreenState extends State<ChatScreen> {
             final blocked = !isGroup && chat?.isBlocked() == true;
 
             final warning = _idleWarningProgress;
-            return Scaffold(
+            final selecting = _selectedMessageIds.isNotEmpty;
+            return PopScope(
+              canPop: !selecting,
+              onPopInvokedWithResult: (didPop, _) {
+                if (didPop) return;
+                _clearMessageSelection();
+              },
+              child: Scaffold(
               backgroundColor: IdleWarningLook.scaffold(warning),
               floatingActionButton: null,
               appBar: AppBar(
                 backgroundColor: IdleWarningLook.appBar(warning),
                 foregroundColor: Colors.white70,
                 elevation: 0,
-                title: StreamBuilder<AppUser?>(
+                automaticallyImplyLeading: !selecting,
+                leading: selecting
+                    ? IconButton(
+                        tooltip: 'Seçimi kapat',
+                        onPressed: _clearMessageSelection,
+                        icon: const Icon(Icons.close),
+                      )
+                    : null,
+                title: selecting
+                    ? Text(
+                        '${_selectedMessageIds.length} seçildi',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      )
+                    : StreamBuilder<AppUser?>(
                   stream: isGroup ? null : _otherUserStream,
                   builder: (context, snapshot) {
                     final user = snapshot.data;
@@ -1640,7 +1881,31 @@ class _ChatScreenState extends State<ChatScreen> {
                     );
                   },
                 ),
-                actions: [
+                actions: selecting
+                    ? [
+                        if (_loneEditableMessage() != null)
+                          IconButton(
+                            tooltip: 'Düzenle',
+                            onPressed: () {
+                              final message = _loneEditableMessage();
+                              if (message == null) return;
+                              _clearMessageSelection();
+                              _startEdit(message);
+                            },
+                            icon: const Icon(Icons.edit_outlined, size: 20),
+                          ),
+                        IconButton(
+                          tooltip: 'Kopyala',
+                          onPressed: _copySelectedMessages,
+                          icon: const Icon(Icons.copy, size: 20),
+                        ),
+                        IconButton(
+                          tooltip: 'Benden sil',
+                          onPressed: _deleteSelectedMessages,
+                          icon: const Icon(Icons.delete_outline),
+                        ),
+                      ]
+                    : [
                   if (!isGroup &&
                       widget.otherUserId.isNotEmpty &&
                       widget.chatId.isNotEmpty)
@@ -1669,6 +1934,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     color: const Color(0xFF161616),
                     icon: const Icon(Icons.more_vert, size: 22),
                     padding: EdgeInsets.zero,
+                    menuPadding: const EdgeInsets.symmetric(vertical: 6),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                     style: const ButtonStyle(
                       visualDensity: VisualDensity.compact,
                     ),
@@ -1707,6 +1976,22 @@ class _ChatScreenState extends State<ChatScreen> {
                         'Bu yazışma engellenmiş. Yeni mesaj gönderilemez.',
                         style: TextStyle(
                           color: Color(0xFFFF8A80),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  if (chat?.isGroupTimedOut() == true)
+                    Container(
+                      width: double.infinity,
+                      color: const Color(0xFF2A2418),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Text(
+                        'Bu grup ${ChatFormat.eventDateTime(chat!.groupTimeoutUntil)} tarihine kadar askıda.',
+                        style: const TextStyle(
+                          color: Color(0xFFFFCC80),
                           fontSize: 12,
                         ),
                       ),
@@ -1771,22 +2056,45 @@ class _ChatScreenState extends State<ChatScreen> {
                               ),
                             )
                             .toList();
-                        final pending = _pendingOutgoing
-                            .where(
-                              (item) => !_pendingCoveredBy(item, visible),
-                            )
-                            .toList();
-                        if (pending.length != _pendingOutgoing.length) {
+                        final pending = List<ChatMessage>.from(_pendingOutgoing);
+                        final messages = _withOutgoingDrafts(visible, pending);
+                        final ownUploaded = <String>[
+                          for (final message in visible)
+                            if (message.senderId == currentUserId &&
+                                (message.hasMedia || message.hasFile) &&
+                                (message.isHttpMedia ||
+                                    message.isStoragePath) &&
+                                !settings.isMediaUploaded(message.id))
+                              message.id,
+                        ];
+                        if (ownUploaded.isNotEmpty ||
+                            _pendingOutgoing.any(
+                              (item) => _pendingSyncedBy(item, visible),
+                            )) {
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             if (!mounted) return;
-                            setState(() {
-                              _pendingOutgoing.removeWhere(
-                                (item) => _pendingCoveredBy(item, visible),
+                            final uploadedIds = [...ownUploaded];
+                            for (final draft in _pendingOutgoing) {
+                              if (!_pendingSyncedBy(draft, visible)) continue;
+                              unawaited(_queue?.complete(draft.id));
+                              if (!draft.hasMedia && !draft.hasFile) continue;
+                              uploadedIds.add(draft.id);
+                              for (final message in visible) {
+                                if (_isSameOutgoing(draft, message) &&
+                                    !message.pendingWrite) {
+                                  uploadedIds.add(message.id);
+                                }
+                              }
+                            }
+                            if (uploadedIds.isNotEmpty) {
+                              unawaited(
+                                context.read<SettingsService>().markMediaUploaded(
+                                  uploadedIds,
+                                ),
                               );
-                            });
+                            }
                           });
                         }
-                        final messages = [...visible, ...pending];
 
                         if (!_initialMessageHandled &&
                             (widget.initialMessageId ?? '').isNotEmpty &&
@@ -1796,6 +2104,13 @@ class _ChatScreenState extends State<ChatScreen> {
                             if (!mounted) return;
                             _jumpToMessage(widget.initialMessageId!, messages);
                           });
+                        }
+
+                        if (messages.isNotEmpty && _sessionUnreadId == null && !_didInitialAlign) {
+                          _sessionUnreadId = _firstUnreadIdOf(
+                            messages,
+                            currentUserId,
+                          );
                         }
 
                         if (messages.length != _lastMarkedMessages.length ||
@@ -1880,15 +2195,14 @@ class _ChatScreenState extends State<ChatScreen> {
                             final isRead =
                                 settings.readReceiptsEnabled &&
                                 message.readBy.any((id) => id != currentUserId);
-                            final firstUnreadId = _firstUnreadIdOf(
-                              messages,
-                              currentUserId,
-                            );
+                            final firstUnreadId = _sessionUnreadId;
 
-                            final messageKey = _messageKeys.putIfAbsent(
-                              message.id,
-                              () => GlobalKey(),
-                            );
+            final bubbleKey = message.clientKey ?? message.id;
+            final messageKey = _messageKeys.putIfAbsent(
+              bubbleKey,
+              () => GlobalKey(),
+            );
+            _messageKeys[message.id] = messageKey;
                             return Column(
                               key: messageKey,
                               children: [
@@ -1912,41 +2226,98 @@ class _ChatScreenState extends State<ChatScreen> {
                                       ? _userFor(message.senderId)
                                       : null,
                                   builder: (context, senderSnapshot) {
-                                    final pending = message.id.startsWith(
-                                      'local-',
-                                    );
+                                    final selecting =
+                                        _selectedMessageIds.isNotEmpty;
+                                    final selected = _selectedMessageIds
+                                        .contains(message.id);
                                     return ReplySwipe(
-                                      onReply: () => _startReply(message),
-                                      child: RepaintBoundary(
-                                        child: MessageBubble(
-                                          message: message,
-                                          isMine: isMine,
-                                          isRead: isRead,
-                                          pending: pending,
-                                          senderLabel: isGroup && !isMine
-                                              ? (senderSnapshot
-                                                        .data
-                                                        ?.visibleName ??
-                                                    'Grup üyesi')
-                                              : null,
-                                          highlighted:
-                                              message.id ==
-                                              _highlightedMessageId,
-                                          onMediaTap: () => _openMedia(message),
-                                          onReplyTap:
-                                              (message.replyToId ?? '').isEmpty
-                                              ? null
-                                              : () => _jumpToMessage(
-                                                  message.replyToId!,
-                                                  messages,
+                                      onReply: selecting
+                                          ? () {}
+                                          : () => _startReply(message),
+                                      onMenu: selecting
+                                          ? () {}
+                                          : () => _showMessageMenu(
+                                              message,
+                                              isMine,
+                                              chat,
+                                              context,
+                                            ),
+                                      child: Row(
+                                        children: [
+                                          if (selecting)
+                                            GestureDetector(
+                                              onTap: () =>
+                                                  _toggleMessageSelection(
+                                                    message,
+                                                  ),
+                                              child: Padding(
+                                                padding: const EdgeInsets.only(
+                                                  left: 10,
+                                                  right: 2,
                                                 ),
-                                          onLongPress: () =>
-                                              _onMessageLongPress(
-                                                message,
-                                                isMine,
-                                                chat,
+                                                child: Icon(
+                                                  selected
+                                                      ? Icons.check_circle
+                                                      : Icons.circle_outlined,
+                                                  size: 22,
+                                                  color: selected
+                                                      ? const Color(0xFF90CAF9)
+                                                      : Colors.white38,
+                                                ),
                                               ),
-                                        ),
+                                            ),
+                                          Expanded(
+                                            child: RepaintBoundary(
+                                              child: MessageBubble(
+                                                message: message,
+                                                isMine: isMine,
+                                                isRead: isRead,
+                                                pending: message.pendingWrite,
+                                                selected: selected,
+                                                localPath: _cachedMediaPath(
+                                                  message,
+                                                  settings,
+                                                ),
+                                                downloading:
+                                                    _downloadingMediaIds
+                                                        .contains(message.id),
+                                                downloaded: settings
+                                                    .isMediaDownloaded(
+                                                      message.id,
+                                                    ),
+                                                senderLabel: isGroup && !isMine
+                                                    ? (senderSnapshot
+                                                              .data
+                                                              ?.visibleName ??
+                                                          'Grup üyesi')
+                                                    : null,
+                                                highlighted:
+                                                    message.id ==
+                                                    _highlightedMessageId,
+                                                onLongPress: () =>
+                                                    _toggleMessageSelection(
+                                                      message,
+                                                    ),
+                                                onTap: selecting
+                                                    ? () =>
+                                                          _toggleMessageSelection(
+                                                            message,
+                                                          )
+                                                    : null,
+                                                onMediaTap: () =>
+                                                    _openMedia(message),
+                                                onReplyTap:
+                                                    (message.replyToId ?? '')
+                                                        .isEmpty
+                                                    ? null
+                                                    : () => _jumpToMessage(
+                                                        message.replyToId!,
+                                                        messages,
+                                                      ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     );
                                   },
@@ -1971,18 +2342,37 @@ class _ChatScreenState extends State<ChatScreen> {
                       ],
                     ),
                   ),
-                  TickingBuilder(
-                    interval: const Duration(seconds: 2),
-                    builder: (_) {
-                      final typing =
-                          !isGroup &&
-                          settings.typingEnabled &&
-                          chat != null &&
-                          chat.isOtherTyping(widget.otherUserId);
-                      if (!typing) return const SizedBox.shrink();
-                      return const TypingBubble();
-                    },
-                  ),
+                  if (_notice != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                      child: GestureDetector(
+                        onTap: _dismissNotice,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF161616),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: const Color(0xFF2C2C2C)),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            child: Text(
+                              _notice!,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                height: 1.3,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   if (_editingMessage != null)
                     Container(
                       width: double.infinity,
@@ -2054,13 +2444,70 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   SafeArea(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(4, 4, 2, 6),
+                      padding: const EdgeInsets.fromLTRB(10, 4, 4, 6),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
+                          TickingBuilder(
+                            interval: const Duration(seconds: 2),
+                            builder: (_) {
+                              final keyboardOpen =
+                                  MediaQuery.viewInsetsOf(context).bottom >= 80;
+                              final typing = !isGroup &&
+                                  settings.typingEnabled &&
+                                  chat != null &&
+                                  chat.isOtherTyping(widget.otherUserId);
+                              return Row(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  _AttachFlyoutButton(
+                                    enabled: !blocked,
+                                    collapsed: keyboardOpen,
+                                    showTyping: typing && !keyboardOpen,
+                                    onPickFile: _pickAndSendFile,
+                                    onPickGallery: _pickGalleryMedia,
+                                    onShareLocation: _shareLocation,
+                                  ),
+                                  if (!keyboardOpen) const SizedBox(width: 6),
+                                  Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Fotoğraf / video',
+                                        padding: EdgeInsets.zero,
+                                        visualDensity: VisualDensity.compact,
+                                        constraints: _composerIconConstraints,
+                                        style: _composerIconStyle,
+                                        color: Colors.white70,
+                                        onPressed:
+                                            blocked ? null : _captureMedia,
+                                        icon: const Icon(
+                                          Icons.photo_camera_outlined,
+                                          size: 26,
+                                        ),
+                                      ),
+                                      if (typing && keyboardOpen)
+                                        const Positioned(
+                                          right: -4,
+                                          top: -5,
+                                          child: IgnorePointer(
+                                            child: TypingBubble(),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                          const SizedBox(width: 6),
                           IconButton(
                             tooltip: _ttlLabel(),
+                            padding: EdgeInsets.zero,
                             visualDensity: VisualDensity.compact,
+                            constraints: _composerIconConstraints,
+                            style: _composerIconStyle,
                             color: _expireSeconds == null
                                 ? Colors.white38
                                 : const Color(0xFFFFCC80),
@@ -2069,25 +2516,10 @@ class _ChatScreenState extends State<ChatScreen> {
                               _expireSeconds == null
                                   ? Icons.timer_off_outlined
                                   : Icons.timer_outlined,
-                              size: 22,
+                              size: 26,
                             ),
                           ),
-                          if (MediaQuery.viewInsetsOf(context).bottom < 80) ...[
-                            IconButton(
-                              tooltip: 'Fotoğraf / video',
-                              visualDensity: VisualDensity.compact,
-                              color: Colors.white70,
-                              onPressed: blocked ? null : _captureMedia,
-                              icon: const Icon(Icons.photo_camera_outlined, size: 22),
-                            ),
-                            IconButton(
-                              tooltip: 'Dosya',
-                              visualDensity: VisualDensity.compact,
-                              color: Colors.white70,
-                              onPressed: blocked ? null : _pickAndSendFile,
-                              icon: const Icon(Icons.attach_file, size: 22),
-                            ),
-                          ],
+                          const SizedBox(width: 6),
                           Expanded(
                             child: Focus(
                               onKeyEvent: _onKey,
@@ -2113,7 +2545,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                   filled: true,
                                   fillColor: const Color(0xFF1A1A1A),
                                   contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
+                                    horizontal: 8,
                                     vertical: 10,
                                   ),
                                   border: OutlineInputBorder(
@@ -2133,30 +2565,10 @@ class _ChatScreenState extends State<ChatScreen> {
                               ),
                             ),
                           ),
-                          Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              IconButton(
-                                color: Colors.white70,
-                                onPressed: blocked ? null : _sendText,
-                                icon: const Icon(Icons.arrow_upward),
-                              ),
-                              if (_mediaUploading)
-                                const Positioned(
-                                  top: 6,
-                                  right: 6,
-                                  child: IgnorePointer(
-                                    child: SizedBox(
-                                      width: 12,
-                                      height: 12,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.8,
-                                        color: Colors.white70,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                            ],
+                          IconButton(
+                            color: Colors.white70,
+                            onPressed: blocked ? null : _sendText,
+                            icon: const Icon(Icons.arrow_upward),
                           ),
                         ],
                       ),
@@ -2164,6 +2576,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ],
               ),
+            ),
             );
           },
         );
@@ -2171,3 +2584,203 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
+
+const _composerIconConstraints = BoxConstraints.tightFor(width: 44, height: 44);
+
+final _composerIconStyle = IconButton.styleFrom(
+  padding: EdgeInsets.zero,
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  minimumSize: const Size(44, 44),
+  maximumSize: const Size(44, 44),
+  visualDensity: VisualDensity.compact,
+);
+
+class _AttachFlyoutButton extends StatefulWidget {
+  const _AttachFlyoutButton({
+    required this.enabled,
+    required this.onPickFile,
+    required this.onPickGallery,
+    required this.onShareLocation,
+    this.showTyping = false,
+    this.collapsed = false,
+  });
+
+  final bool enabled;
+  final bool showTyping;
+  final bool collapsed;
+  final VoidCallback onPickFile;
+  final VoidCallback onPickGallery;
+  final VoidCallback onShareLocation;
+
+  @override
+  State<_AttachFlyoutButton> createState() => _AttachFlyoutButtonState();
+}
+
+class _AttachFlyoutButtonState extends State<_AttachFlyoutButton>
+    with SingleTickerProviderStateMixin {
+  final _portal = OverlayPortalController();
+  final _link = LayerLink();
+  late final AnimationController _anim;
+  late final CurvedAnimation _motion;
+  late final Animation<Offset> _slide;
+
+  @override
+  void initState() {
+    super.initState();
+    _anim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 150),
+      reverseDuration: const Duration(milliseconds: 120),
+    );
+    _motion = CurvedAnimation(
+      parent: _anim,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.35),
+      end: Offset.zero,
+    ).animate(_motion);
+  }
+
+  @override
+  void dispose() {
+    if (_portal.isShowing) _portal.hide();
+    _motion.dispose();
+    _anim.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggle() async {
+    if (!widget.enabled || widget.collapsed) return;
+    if (_portal.isShowing) {
+      await _anim.reverse();
+      if (mounted) _portal.hide();
+      return;
+    }
+    _portal.show();
+    await _anim.forward(from: 0);
+  }
+
+  Future<void> _run(VoidCallback action) async {
+    await _anim.reverse();
+    if (mounted) _portal.hide();
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    action();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.collapsed && _portal.isShowing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_portal.isShowing) return;
+        _anim.value = 0;
+        _portal.hide();
+      });
+    }
+    return OverlayPortal(
+      controller: _portal,
+      overlayChildBuilder: (context) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _toggle,
+              ),
+            ),
+            CompositedTransformFollower(
+              link: _link,
+              showWhenUnlinked: false,
+              targetAnchor: Alignment.topLeft,
+              followerAnchor: Alignment.bottomLeft,
+              offset: const Offset(0, -4),
+              child: UnconstrainedBox(
+                child: FadeTransition(
+                  opacity: _motion,
+                  child: SlideTransition(
+                    position: _slide,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _flyIcon(
+                          tooltip: 'Galeri',
+                          icon: Icons.photo_outlined,
+                          onTap: () => _run(widget.onPickGallery),
+                        ),
+                        _flyIcon(
+                          tooltip: 'Dosya',
+                          icon: Icons.folder_outlined,
+                          onTap: () => _run(widget.onPickFile),
+                        ),
+                        _flyIcon(
+                          tooltip: 'Konum paylaş',
+                          icon: Icons.location_on_outlined,
+                          onTap: () => _run(widget.onShareLocation),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+      child: widget.collapsed
+          ? const SizedBox.shrink()
+          : CompositedTransformTarget(
+              link: _link,
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  IconButton(
+                    tooltip: 'Ekle',
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    constraints: _composerIconConstraints,
+                    style: _composerIconStyle,
+                    color: Colors.white70,
+                    onPressed: widget.enabled ? _toggle : null,
+                    icon: Transform.translate(
+                      offset: const Offset(0, -1.5),
+                      child: const Icon(Icons.attach_file, size: 24),
+                    ),
+                  ),
+                  if (widget.showTyping)
+                    const Positioned(
+                      right: -4,
+                      top: -5,
+                      child: IgnorePointer(child: TypingBubble()),
+                    ),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _flyIcon({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: const Color(0xFF1E1E1E),
+        shape: const CircleBorder(),
+        child: IconButton(
+          tooltip: tooltip,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+          color: Colors.white70,
+          onPressed: onTap,
+          icon: Icon(icon, size: 24),
+        ),
+      ),
+    );
+  }
+}
+

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -14,27 +16,39 @@ class MessageBubble extends StatelessWidget {
     required this.isMine,
     required this.isRead,
     this.senderLabel,
-    this.onLongPress,
     this.onMediaTap,
     this.onReplyTap,
+    this.onLongPress,
+    this.onTap,
     this.highlighted = false,
+    this.selected = false,
     this.pending = false,
+    this.downloaded = false,
+    this.downloading = false,
+    this.localPath,
   });
 
   final ChatMessage message;
   final bool isMine;
   final bool isRead;
   final String? senderLabel;
-  final VoidCallback? onLongPress;
   final VoidCallback? onMediaTap;
   final VoidCallback? onReplyTap;
+  final VoidCallback? onLongPress;
+  final VoidCallback? onTap;
   final bool highlighted;
+  final bool selected;
   final bool pending;
+  final bool downloaded;
+  final bool downloading;
+  final String? localPath;
 
   @override
   Widget build(BuildContext context) {
     final alignment = isMine ? Alignment.centerRight : Alignment.centerLeft;
-    final color = highlighted
+    final color = selected
+        ? const Color(0xFF1E2A33)
+        : highlighted
         ? const Color(0xFF4A3F22)
         : isMine
         ? const Color(0xFF2A2A2A)
@@ -45,7 +59,7 @@ class MessageBubble extends StatelessWidget {
       alignment: alignment,
       child: GestureDetector(
         onLongPress: onLongPress,
-        onTap: message.hasMedia || message.hasFile ? onMediaTap : null,
+        onTap: onTap ?? (message.hasMedia || message.hasFile ? onMediaTap : null),
         child: Padding(
           padding: EdgeInsets.only(
             top: message.reactions.isEmpty ? 0 : 8,
@@ -63,7 +77,9 @@ class MessageBubble extends StatelessWidget {
                   color: color,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: highlighted
+                    color: selected
+                        ? const Color(0xFF90CAF9)
+                        : highlighted
                         ? const Color(0xFFFFCC80)
                         : const Color(0xFF2C2C2C),
                   ),
@@ -113,22 +129,14 @@ class MessageBubble extends StatelessWidget {
                     if (message.hasMedia)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 6),
-                        child: message.type == MessageType.video
-                            ? const _VideoThumb()
-                            : ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 240,
-                                    maxHeight: 280,
-                                  ),
-                                  child: CachedNetworkImage(
-                                    imageUrl: message.mediaUrl!,
-                                    fit: BoxFit.contain,
-                                    memCacheWidth: 720,
-                                  ),
-                                ),
-                              ),
+                        child: _MediaThumb(
+                          message: message,
+                          isMine: isMine,
+                          pending: pending,
+                          downloaded: downloaded,
+                          downloading: downloading,
+                          localPath: localPath,
+                        ),
                       )
                     else if (message.hasFile)
                       Padding(
@@ -164,8 +172,8 @@ class MessageBubble extends StatelessWidget {
               if (message.reactions.isNotEmpty)
                 Positioned(
                   top: -2,
-                  right: isMine ? 18 : null,
-                  left: isMine ? null : 18,
+                  left: isMine ? 18 : null,
+                  right: isMine ? null : 18,
                   child: _ReactionBadge(counts: message.reactionCounts),
                 ),
             ],
@@ -399,19 +407,147 @@ class _ReactionBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (final item in items.take(3)) ...[
-            Text(item.key, style: const TextStyle(fontSize: 12, height: 1)),
-            if (item.value > 1)
+          for (var i = 0; i < items.take(3).length; i++) ...[
+            if (i > 0) const SizedBox(width: 4),
+            Text(items[i].key, style: const TextStyle(fontSize: 12, height: 1)),
+            if (items[i].value > 1)
               Padding(
-                padding: const EdgeInsets.only(left: 2, right: 4),
+                padding: const EdgeInsets.only(left: 2),
                 child: Text(
-                  '${item.value}',
+                  '${items[i].value}',
                   style: const TextStyle(color: Colors.white54, fontSize: 10),
                 ),
-              )
-            else
-              const SizedBox(width: 4),
+              ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MediaThumb extends StatelessWidget {
+  const _MediaThumb({
+    required this.message,
+    required this.isMine,
+    required this.pending,
+    required this.downloaded,
+    required this.downloading,
+    this.localPath,
+  });
+
+  final ChatMessage message;
+  final bool isMine;
+  final bool pending;
+  final bool downloaded;
+  final bool downloading;
+  final String? localPath;
+
+  String? get _filePath {
+    final cached = localPath;
+    if (cached != null && cached.isNotEmpty && File(cached).existsSync()) {
+      return cached;
+    }
+    if (message.isLocalMediaFile && File(message.mediaUrl!).existsSync()) {
+      return message.mediaUrl;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final path = _filePath;
+    final reveal = isMine || downloaded || path != null;
+    final media = !reveal
+        ? const _LockedThumb()
+        : message.type == MessageType.video
+        ? const _VideoThumb()
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: 240,
+                maxHeight: 280,
+              ),
+              child: path != null
+                  ? Image.file(File(path), fit: BoxFit.contain)
+                  : message.isHttpMedia
+                  ? CachedNetworkImage(
+                      imageUrl: message.mediaUrl!,
+                      fit: BoxFit.contain,
+                      memCacheWidth: 720,
+                    )
+                  : const _LockedThumb(),
+            ),
+          );
+    final showSpinner = downloading;
+    final showTick = downloaded && !downloading;
+    return Stack(
+      children: [
+        media,
+        if (showSpinner || showTick)
+          Positioned(
+            left: isMine ? 6 : null,
+            right: isMine ? null : 6,
+            bottom: 6,
+            child: _TransferMark(downloading: showSpinner),
+          ),
+      ],
+    );
+  }
+}
+
+class _TransferMark extends StatelessWidget {
+  const _TransferMark({required this.downloading});
+
+  final bool downloading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      height: 22,
+      decoration: const BoxDecoration(
+        color: Color(0xCC0B0B0B),
+        shape: BoxShape.circle,
+      ),
+      child: downloading
+          ? const Padding(
+              padding: EdgeInsets.all(4),
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Color(0xFF42A5F5),
+              ),
+            )
+          : const Icon(
+              Icons.download_done,
+              size: 14,
+              color: Color(0xFF42A5F5),
+            ),
+    );
+  }
+}
+
+class _LockedThumb extends StatelessWidget {
+  const _LockedThumb();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 180,
+      height: 120,
+      decoration: BoxDecoration(
+        color: const Color(0xFF090909),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.download_outlined, color: Color(0xFF42A5F5), size: 28),
+          SizedBox(height: 6),
+          Text(
+            'İndir',
+            style: TextStyle(color: Colors.white54, fontSize: 12),
+          ),
         ],
       ),
     );

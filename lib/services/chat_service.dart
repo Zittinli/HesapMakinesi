@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/chat_model.dart';
 import '../models/chat_pref_model.dart';
@@ -28,6 +29,13 @@ class IncomingNudge {
   final String from;
   final String chatId;
   final DateTime? createdAt;
+}
+
+class SentMediaItem {
+  const SentMediaItem({required this.message, required this.chat});
+
+  final ChatMessage message;
+  final ChatRoom chat;
 }
 
 class GroupEmailParseResult {
@@ -158,6 +166,10 @@ class ChatService {
 
   CollectionReference<Map<String, dynamic>> _incomingNudges(String userId) =>
       _firestore.collection('users').doc(userId).collection('incomingNudges');
+  CollectionReference<Map<String, dynamic>> _forceLockAllow(String userId) =>
+      _firestore.collection('users').doc(userId).collection('forceLockAllow');
+  CollectionReference<Map<String, dynamic>> _incomingForceLocks(String userId) =>
+      _firestore.collection('users').doc(userId).collection('incomingForceLocks');
 
   Future<ChatRoom?> getChat(String chatId) async {
     final snap = await _chats.doc(chatId).get();
@@ -176,6 +188,66 @@ class ChatService {
         .where('participants', arrayContains: userId)
         .get();
     return snapshot.docs.map(ChatRoom.fromFirestore).toList();
+  }
+
+  Future<List<SentMediaItem>> listMediaSentBy(String senderId) async {
+    if (senderId.isEmpty) return const [];
+    final chats = await chatsForUser(senderId);
+    if (chats.isEmpty) return const [];
+    final chunks = await Future.wait(
+      chats.map((chat) async {
+        final snapshot = await _chats
+            .doc(chat.id)
+            .collection('messages')
+            .where('senderId', isEqualTo: senderId)
+            .where('type', whereIn: const ['image', 'video'])
+            .get();
+        return snapshot.docs
+            .map(ChatMessage.fromFirestore)
+            .where(
+              (message) =>
+                  message.hasMedia &&
+                  !message.deletedForEveryone &&
+                  !message.expiredDeleted,
+            )
+            .map((message) => SentMediaItem(message: message, chat: chat));
+      }),
+    );
+    final items = chunks.expand((chunk) => chunk).toList();
+    items.sort((a, b) {
+      final at = a.message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = b.message.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bt.compareTo(at);
+    });
+    return items;
+  }
+
+  Future<Map<String, DateTime>> lastMediaAtBySender() async {
+    final chats = await _chats.get();
+    final latest = <String, DateTime>{};
+    await Future.wait(
+      chats.docs.map((chat) async {
+        final snapshot = await chat.reference
+            .collection('messages')
+            .where('type', whereIn: const ['image', 'video'])
+            .get();
+        for (final doc in snapshot.docs) {
+          final message = ChatMessage.fromFirestore(doc);
+          if (!message.hasMedia ||
+              message.deletedForEveryone ||
+              message.expiredDeleted ||
+              message.senderId.isEmpty ||
+              message.createdAt == null) {
+            continue;
+          }
+          final prev = latest[message.senderId];
+          if (prev == null || message.createdAt!.isAfter(prev)) {
+            latest[message.senderId] = message.createdAt!;
+          }
+        }
+      }),
+    );
+    return latest;
   }
 
   Stream<List<ChatRoom>> watchUserChats(String userId) {
@@ -209,7 +281,7 @@ class ChatService {
         .collection('messages')
         .orderBy('createdAt', descending: true)
         .limit(limit)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .map((snapshot) {
           final messages = snapshot.docs
               .map(ChatMessage.fromFirestore)
@@ -334,6 +406,41 @@ class ChatService {
       'blockedBy': <String>[],
     });
     return chatRef.id;
+  }
+
+  Stream<List<ChatRoom>> watchAllGroups() {
+    return _chats.where('isGroup', isEqualTo: true).snapshots().map((snapshot) {
+      final chats = snapshot.docs.map(ChatRoom.fromFirestore).toList();
+      chats.sort((a, b) {
+        final at = a.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bt = b.lastMessageAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bt.compareTo(at);
+      });
+      return chats;
+    });
+  }
+
+  Future<void> setGroupPhotoUrl({
+    required String chatId,
+    required String url,
+  }) async {
+    if (url.length > 8000) {
+      throw ArgumentError('Fotoğraf adresi geçersiz.');
+    }
+    await _updateGroup(chatId, (state) {
+      state['groupPhotoUrl'] = url;
+    });
+  }
+
+  Future<void> setGroupTimeout({
+    required String chatId,
+    Duration? timeout,
+  }) async {
+    await _chats.doc(chatId).update({
+      'groupTimeoutUntil': timeout == null
+          ? null
+          : Timestamp.fromDate(DateTime.now().add(timeout)),
+    });
   }
 
   Future<void> renameGroup({
@@ -497,6 +604,9 @@ class ChatService {
       if (updatedName != (data['groupName'] as String? ?? '')) {
         updates['groupName'] = updatedName;
       }
+      if (state.containsKey('groupPhotoUrl')) {
+        updates['groupPhotoUrl'] = state['groupPhotoUrl'];
+      }
       await ref.update(updates);
     } on FirebaseException catch (error) {
       if (error.code == 'permission-denied') {
@@ -658,6 +768,22 @@ class ChatService {
     });
   }
 
+  Future<void> markMessageDownloaded({
+    required String chatId,
+    required String messageId,
+    required String userId,
+  }) async {
+    if (chatId.isEmpty ||
+        messageId.isEmpty ||
+        messageId.startsWith('local-') ||
+        userId.isEmpty) {
+      return;
+    }
+    await _chats.doc(chatId).collection('messages').doc(messageId).update({
+      'downloadedBy': FieldValue.arrayUnion([userId]),
+    });
+  }
+
   Future<List<ChatMessage>> searchMessagesInChat({
     required String chatId,
     required String query,
@@ -742,10 +868,12 @@ class ChatService {
     )) {
       updates['unreadCounts.$participantId'] = FieldValue.increment(1);
     }
-    final batch = _firestore.batch();
-    batch.set(messageRef, message.toFirestore());
-    batch.update(chatRef, updates);
-    await batch.commit();
+    await messageRef.set(message.toFirestore());
+    try {
+      await chatRef.update(updates);
+    } catch (error) {
+      debugPrint('HM_CHAT_PREVIEW_UPDATE_FAILED: $error');
+    }
   }
 
   Future<void> markMessagesAsRead({
@@ -936,6 +1064,82 @@ class ChatService {
     return _incomingNudges(userId).doc(nudgeId).delete();
   }
 
+  Stream<bool> watchForceLockAllowed({
+    required String ownerId,
+    required String peerId,
+  }) {
+    if (ownerId.isEmpty || peerId.isEmpty) {
+      return Stream<bool>.value(false);
+    }
+    return _nudgeListen(
+      _forceLockAllow(ownerId).doc(peerId).snapshots().map((doc) {
+        return doc.data()?['allow'] == true;
+      }),
+      false,
+    );
+  }
+
+  Future<void> setForceLockAllow({
+    required String userId,
+    required String peerId,
+    required String chatId,
+    required bool allow,
+  }) {
+    if (userId.isEmpty || peerId.isEmpty || chatId.isEmpty || userId == peerId) {
+      return Future<void>.value();
+    }
+    return _forceLockAllow(userId).doc(peerId).set({
+      'allow': allow,
+      'chatId': chatId,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Stream<List<IncomingNudge>> watchIncomingForceLocks(String userId) {
+    if (userId.isEmpty) return Stream<List<IncomingNudge>>.value(const []);
+    return _nudgeListen(
+      _incomingForceLocks(userId).snapshots().map((snapshot) {
+        return snapshot.docs.map((doc) {
+          final data = doc.data();
+          return IncomingNudge(
+            id: doc.id,
+            from: data['from'] as String? ?? '',
+            chatId: data['chatId'] as String? ?? '',
+            createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+          );
+        }).toList();
+      }),
+      const [],
+    );
+  }
+
+  Future<void> sendForceLock({
+    required String fromId,
+    required String toId,
+    required String chatId,
+  }) async {
+    if (fromId.isEmpty || toId.isEmpty || chatId.isEmpty || fromId == toId) {
+      throw StateError('Gönderilemedi.');
+    }
+    try {
+      await _incomingForceLocks(toId).add({
+        'from': fromId,
+        'chatId': chatId,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      throw StateError('Karşı taraf bu işlemi onaylamadı.');
+    }
+  }
+
+  Future<void> consumeIncomingForceLock({
+    required String userId,
+    required String lockId,
+  }) {
+    if (userId.isEmpty || lockId.isEmpty) return Future<void>.value();
+    return _incomingForceLocks(userId).doc(lockId).delete();
+  }
+
   Future<void> clearChatForMe({
     required String userId,
     required String chatId,
@@ -1050,12 +1254,17 @@ class ChatService {
     required String chatId,
     required List<ChatMessage> messages,
   }) async {
-    final expired = messages.where((m) => m.isExpired()).toList();
+    final expired = messages
+        .where((m) => m.isExpired() && !m.expiredDeleted)
+        .toList();
     if (expired.isEmpty) return;
 
     final batch = _firestore.batch();
     for (final message in expired) {
-      batch.delete(_chats.doc(chatId).collection('messages').doc(message.id));
+      batch.update(
+        _chats.doc(chatId).collection('messages').doc(message.id),
+        {'expiredDeleted': true},
+      );
     }
     await batch.commit();
   }
@@ -1096,7 +1305,7 @@ class ChatService {
         .collection('messages')
         .orderBy('createdAt', descending: true)
         .limit(limit)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .map((snapshot) {
           final messages = snapshot.docs
               .map(ChatMessage.fromFirestore)
@@ -1321,7 +1530,15 @@ class ChatService {
     }
 
     final userRef = _firestore.collection('users').doc(userId);
-    for (final name in ['chatPrefs', 'blocked', 'pendingSent', 'nudgeAllow', 'incomingNudges']) {
+    for (final name in [
+      'chatPrefs',
+      'blocked',
+      'pendingSent',
+      'nudgeAllow',
+      'incomingNudges',
+      'forceLockAllow',
+      'incomingForceLocks',
+    ]) {
       final docs = await userRef.collection(name).get();
       await _commitDeletes(docs.docs.map((doc) => doc.reference));
     }

@@ -5,18 +5,86 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    function isAllowedChatFile() {
+      return request.resource.size < 75 * 1024 * 1024;
+    }
+
+    function isAllowedProfilePhoto() {
+      return request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && (
+          request.auth.uid == 'RUwHPHB6HRdy3l6jBsIexmDHYAB3'
+          || request.auth.token.email.matches('(?i)zttnlnkc@gmail.com')
+        );
+    }
+
+    function chatExists(chatId) {
+      return firestore.exists(/databases/(default)/documents/chats/$(chatId));
+    }
+
+    function isChatParticipant(chatId) {
+      return chatExists(chatId)
+        && request.auth.uid in firestore.get(/databases/(default)/documents/chats/$(chatId)).data.participants;
+    }
+
+    function authEmailKey() {
+      return request.auth.token.email is string
+        ? request.auth.token.email.lower().replace('\\.', ',')
+        : '';
+    }
+
     match /chat_media/{chatId}/{fileName} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn()
-        && request.resource.size < 75 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*|video/.*|audio/.*|application/.*|text/.*');
+      allow read: if isSignedIn() && (isAdmin() || isChatParticipant(chatId));
+      allow create, update: if isSignedIn()
+        && isAllowedChatFile()
+        && (isAdmin() || isChatParticipant(chatId));
+      allow delete: if isSignedIn() && (isAdmin() || isChatParticipant(chatId));
     }
 
     match /pending_media/{emailKey}/{fileName} {
+      allow read: if isSignedIn() && (
+        isAdmin()
+        || authEmailKey() == emailKey
+        || resource.metadata.senderId == request.auth.uid
+      );
+      allow create, update: if isSignedIn()
+        && isAllowedChatFile()
+        && (
+          !('senderId' in request.resource.metadata)
+          || request.resource.metadata.senderId == request.auth.uid
+        );
+      allow delete: if isSignedIn() && (
+        isAdmin()
+        || authEmailKey() == emailKey
+        || resource.metadata.senderId == request.auth.uid
+      );
+    }
+
+    match /profile_photos/{userId}/{fileName} {
       allow read: if isSignedIn();
       allow write: if isSignedIn()
-        && request.resource.size < 75 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*|video/.*|audio/.*|application/.*|text/.*');
+        && request.auth.uid == userId
+        && isAllowedProfilePhoto();
+    }
+
+    match /group_photos/{chatId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn()
+        && isAllowedProfilePhoto()
+        && (
+          isAdmin()
+          || (
+            chatExists(chatId)
+            && (
+              request.auth.uid in firestore.get(/databases/(default)/documents/chats/$(chatId)).data.adminIds
+              || request.auth.uid == firestore.get(/databases/(default)/documents/chats/$(chatId)).data.createdBy
+            )
+          )
+        );
     }
   }
 }

@@ -1,12 +1,16 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hesap_makinesi/core/admin_config.dart';
+import 'package:hesap_makinesi/core/emoji_catalog.dart';
 import 'package:hesap_makinesi/core/chat_format.dart';
+import 'package:hesap_makinesi/core/staff_perms.dart';
+import 'package:hesap_makinesi/features/settings/admin_search_field.dart';
 import 'package:hesap_makinesi/models/chat_model.dart';
 import 'package:hesap_makinesi/models/message_model.dart';
 import 'package:hesap_makinesi/models/moderation_model.dart';
 import 'package:hesap_makinesi/models/report_model.dart';
 import 'package:hesap_makinesi/models/user_model.dart';
 import 'package:hesap_makinesi/services/chat_service.dart';
+import 'package:hesap_makinesi/services/outgoing_queue_service.dart';
 
 void main() {
   group('ChatFormat', () {
@@ -33,9 +37,28 @@ void main() {
       );
     });
 
+    test('mesaj saati Turkiye UTC+3 basar', () {
+      expect(
+        ChatFormat.messageTime(DateTime.utc(2026, 10, 7, 21, 31, 25)),
+        '00:31',
+      );
+      expect(
+        ChatFormat.eventDateTime(DateTime.utc(2026, 10, 7, 21, 31, 25)),
+        '08.10.2026 00:31',
+      );
+    });
+
     test('son görülme ve son aktif etiketi', () {
       final now = DateTime(2026, 8, 30, 20, 0);
       expect(ChatFormat.lastSeenLabel(now, now: now, isOnline: true), 'Aktif');
+      expect(
+        ChatFormat.lastSeenLabel(
+          DateTime(2026, 8, 30, 18, 0),
+          now: now,
+          isOnline: true,
+        ),
+        'Son görülme: 18:00',
+      );
       expect(
         ChatFormat.lastSeenLabel(DateTime(2026, 8, 30, 19, 59), now: now),
         'Son aktif: az önce',
@@ -65,6 +88,21 @@ void main() {
 
       expect(message.isExpired(), isTrue);
       expect(message.isVisibleTo('b'), isFalse);
+    });
+
+    test('suresi dolunca expiredDeleted ile gizlenir', () {
+      const message = ChatMessage(
+        id: '3',
+        senderId: 'a',
+        text: 'gizli',
+        createdAt: null,
+        readBy: ['a'],
+        expireSeconds: 10,
+        expiredDeleted: true,
+      );
+
+      expect(message.isVisibleTo('b'), isFalse);
+      expect(message.toFirestore()['expiredDeleted'], isTrue);
     });
 
     test('temizlenen sohbet eski mesajı gizler', () {
@@ -116,6 +154,44 @@ void main() {
       expect(message.preview, 'sozlesme.pdf');
       expect(message.hasFile, isTrue);
       expect(message.hasMedia, isFalse);
+      expect(message.isHttpMedia, isTrue);
+      expect(message.isStoragePath, isFalse);
+    });
+
+    test('medya yolu http degil depolama yoludur', () {
+      const stored = ChatMessage(
+        id: 'm1',
+        senderId: 'a',
+        text: 'Fotoğraf',
+        createdAt: null,
+        readBy: ['a'],
+        type: MessageType.image,
+        mediaUrl: 'chat_media/c1/123.jpg',
+      );
+      const pending = ChatMessage(
+        id: 'm2',
+        senderId: 'a',
+        text: 'Fotoğraf',
+        createdAt: null,
+        readBy: ['a'],
+        type: MessageType.image,
+        mediaUrl: 'pending_media/ali,gmail,com/1.jpg',
+      );
+      const local = ChatMessage(
+        id: 'm3',
+        senderId: 'a',
+        text: 'Fotoğraf',
+        createdAt: null,
+        readBy: ['a'],
+        type: MessageType.image,
+        mediaUrl: '/tmp/a.jpg',
+      );
+      expect(stored.isStoragePath, isTrue);
+      expect(stored.isHttpMedia, isFalse);
+      expect(stored.isLocalMediaFile, isFalse);
+      expect(pending.isStoragePath, isTrue);
+      expect(local.isLocalMediaFile, isTrue);
+      expect(local.isStoragePath, isFalse);
     });
 
     test('reaksiyon sayilarini birlestirir', () {
@@ -129,6 +205,22 @@ void main() {
       );
       expect(message.reactionCounts['👍'], 2);
       expect(message.reactionCounts['❤️'], 1);
+    });
+
+    test('yerel taslak sunucuya yazilana kadar pending kalir', () {
+      const local = ChatMessage(
+        id: 'local-1',
+        senderId: 'a',
+        text: 'merhaba',
+        createdAt: null,
+        readBy: ['a'],
+        pendingWrite: true,
+        clientKey: 'local-1',
+      );
+      expect(local.pendingWrite, isTrue);
+      final acked = local.copyWith(pendingWrite: false);
+      expect(acked.pendingWrite, isFalse);
+      expect(acked.clientKey, 'local-1');
     });
 
     test('benden silinen mesaj sadece o kullanıcıya gizlenir', () {
@@ -293,6 +385,67 @@ void main() {
       expect(AdminConfig.isAdminEmail('ZTTNLNKC@GMAIL.COM'), isTrue);
       expect(AdminConfig.isAdminEmail('zittuni1912@gmail.com'), isFalse);
       expect(AdminConfig.isAdminEmail('baskasi@gmail.com'), isFalse);
+      expect(AdminConfig.isFounder(email: 'zttnlnkc@gmail.com'), isTrue);
+    });
+
+    test('ceza raporu ust yetkisi bildirim gormeyi de acar', () {
+      final granted = StaffPerm.toggle(const [], StaffPerm.punishReports);
+      expect(granted.contains(StaffPerm.viewReports), isTrue);
+      expect(granted.contains(StaffPerm.punishReports), isTrue);
+      final withoutView = StaffPerm.toggle(granted, StaffPerm.viewReports);
+      expect(withoutView.contains(StaffPerm.punishReports), isFalse);
+    });
+
+    test('grup timeout yetkisi gruplari gormeyi acar', () {
+      final granted = StaffPerm.toggle(const [], StaffPerm.timeoutGroup);
+      expect(granted.contains(StaffPerm.viewGroups), isTrue);
+      final withoutGroups = StaffPerm.toggle(granted, StaffPerm.viewGroups);
+      expect(withoutGroups.contains(StaffPerm.timeoutGroup), isFalse);
+    });
+
+    test('admin arama ad ve e-postayi yakalar', () {
+      expect(adminSearchMatches('', ['Ada', 'a@x.com']), isTrue);
+      expect(adminSearchMatches('ada', ['Ada', 'a@x.com']), isTrue);
+      expect(adminSearchMatches('x.com', ['Ada', 'a@x.com']), isTrue);
+      expect(adminSearchMatches('zzz', ['Ada', 'a@x.com']), isFalse);
+    });
+
+    test('gizli profil fotografi ve grup timeout', () {
+      const hidden = AppUser(
+        id: 'u',
+        email: 'a@x.com',
+        displayName: 'Ada',
+        isOnline: false,
+        lastSeen: null,
+        createdAt: null,
+        photoUrl: 'https://example.com/a.jpg',
+        photoHidden: true,
+      );
+      expect(hidden.visiblePhotoUrl, isNull);
+      const shown = AppUser(
+        id: 'u',
+        email: 'a@x.com',
+        displayName: 'Ada',
+        isOnline: false,
+        lastSeen: null,
+        createdAt: null,
+        photoUrl: 'https://example.com/a.jpg',
+      );
+      expect(shown.visiblePhotoUrl, 'https://example.com/a.jpg');
+      expect(ReportReason.profilePhoto.label, 'Uygunsuz profil fotoğrafı');
+      expect(
+        ChatRoom(
+          id: 'g',
+          participants: const ['a', 'b', 'c'],
+          lastMessage: '',
+          lastMessageAt: null,
+          lastMessageSenderId: '',
+          isGroup: true,
+          groupName: 'Grup',
+          groupTimeoutUntil: DateTime.now().add(const Duration(hours: 1)),
+        ).isGroupTimedOut(),
+        isTrue,
+      );
     });
 
     test('kalıcı ban ve timeout kişitlar', () {
@@ -420,5 +573,64 @@ void main() {
     final bad = groups.firstWhere((item) => item.email == 'bad@x.com');
     expect(bad.reports, hasLength(2));
     expect(bad.pendingCount, 1);
+  });
+
+  group('OutgoingJob', () {
+    test('json turu tiksiz taslak olarak geri gelir', () {
+      final job = OutgoingJob(
+        id: 'local-1',
+        senderId: 'u1',
+        createdAtMs: DateTime(2026, 10, 8, 3).millisecondsSinceEpoch,
+        text: 'merhaba',
+        type: MessageType.text,
+        chatId: 'c1',
+        expireSeconds: 60,
+      );
+      final copy = OutgoingJob.fromJson(job.toJson());
+      expect(copy.id, 'local-1');
+      expect(copy.chatId, 'c1');
+      expect(copy.expireSeconds, 60);
+      final message = copy.toMessage();
+      expect(message.pendingWrite, isTrue);
+      expect(message.clientKey, 'local-1');
+      expect(message.text, 'merhaba');
+    });
+
+    test('medya kuyrugu sohbet bazinda ayrilir', () {
+      final photo = OutgoingJob(
+        id: 'local-2',
+        senderId: 'u1',
+        createdAtMs: 1,
+        text: 'Fotoğraf',
+        type: MessageType.image,
+        chatId: 'c1',
+        localPath: '/tmp/a.jpg',
+      );
+      final other = photo.copyWith(status: 'queued');
+      expect(other.chatId, 'c1');
+      expect(photo.isMedia, isTrue);
+      expect(photo.toMessage().mediaUrl, '/tmp/a.jpg');
+      expect(photo.toMessage().pendingWrite, isTrue);
+    });
+  });
+
+  group('EmojiCatalog', () {
+    test('hizli emoji listesini kirpar ve tekrarlar', () {
+      final cleaned = EmojiCatalog.normalize([
+        ' 👍 ',
+        '👍',
+        '',
+        '😂',
+        '🔥',
+        '🎉',
+        '💯',
+        '🥰',
+        '😍',
+        '😘',
+        '😊',
+      ]);
+      expect(cleaned, ['👍', '😂', '🔥', '🎉', '💯', '🥰', '😍', '😘']);
+      expect(cleaned, hasLength(EmojiCatalog.maxQuick));
+    });
   });
 }

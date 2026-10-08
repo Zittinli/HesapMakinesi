@@ -5,6 +5,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/admin_config.dart';
+import '../core/emoji_catalog.dart';
+import '../core/staff_perms.dart';
 import '../core/verification_policy.dart';
 import '../models/user_model.dart';
 import 'auth_log_service.dart';
@@ -293,6 +295,61 @@ class AuthService extends ChangeNotifier {
       'displayNameChangedAt': FieldValue.serverTimestamp(),
     });
     notifyListeners();
+  }
+
+  Future<void> updateProfilePhotoUrl(String url) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) throw StateError('Oturum bulunamadı.');
+    if (url.length > 8000) {
+      throw StateError('Fotoğraf adresi geçersiz.');
+    }
+    await _firestore.collection('users').doc(uid).update({'photoUrl': url});
+    notifyListeners();
+  }
+
+  Future<void> clearProfilePhoto() async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) throw StateError('Oturum bulunamadı.');
+    await _firestore.collection('users').doc(uid).update({'photoUrl': ''});
+    notifyListeners();
+  }
+
+  Future<void> setStaffPerms({
+    required String userId,
+    required String email,
+    required Iterable<String> perms,
+  }) async {
+    final me = _auth.currentUser;
+    if (me == null || !AdminConfig.isAdminEmail(me.email)) {
+      throw StateError('Yetki vermek için kurucu yönetici olmalısın.');
+    }
+    if (AdminConfig.isFounder(email: email, userId: userId)) {
+      throw StateError('Kurucu yöneticinin yetkisi değiştirilemez.');
+    }
+    await _firestore.collection('users').doc(userId).update({
+      'staffPerms': StaffPerm.normalize(perms).toList(),
+    });
+  }
+
+  Future<void> saveQuickEmojis(List<String> emojis) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      throw StateError('Oturum bulunamadı.');
+    }
+    final cleaned = EmojiCatalog.normalize(emojis);
+    if (cleaned.isEmpty) return;
+    try {
+      await _firestore.collection('users').doc(uid).update({
+        'quickEmojis': cleaned,
+      });
+    } on FirebaseException catch (error) {
+      debugPrint('Hızlı emoji yazılamadı: ${error.code}');
+      throw StateError(
+        error.code == 'permission-denied'
+            ? 'Hızlı emojiler bu cihaza kaydedildi. Hesaba yazmak için güvenlik kurallarının yayınlanması gerekiyor.'
+            : 'Hızlı emojiler hesaba yazılamadı.',
+      );
+    }
   }
 
   Future<AppUser?> fetchUser(String userId) async {

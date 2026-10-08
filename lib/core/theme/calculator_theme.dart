@@ -15,5 +15,21 @@ class CalculatorTheme {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: background,
         useMaterial3: true,
+        snackBarTheme: const SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Color(0xFF161616),
+          elevation: 0,
+          contentTextStyle: TextStyle(
+            color: Colors.white70,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            height: 1.3,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(14)),
+            side: BorderSide(color: Color(0xFF2C2C2C)),
+          ),
+          insetPadding: EdgeInsets.fromLTRB(12, 8, 12, 16),
+        ),
       );
 }
