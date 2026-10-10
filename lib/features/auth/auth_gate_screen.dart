@@ -30,6 +30,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
   PresenceService? _presenceService;
   StreamSubscription<AppUser?>? _quickEmojiSub;
   String? _quickEmojiUid;
+  String? _stackUid;
 
   @override
   void initState() {
@@ -69,6 +70,20 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
         }
 
         final user = snapshot.data;
+        final nextUid = user?.uid;
+        if (_stackUid != nextUid) {
+          final previous = _stackUid;
+          _stackUid = nextUid;
+          if (previous != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              final navigator = Navigator.of(context);
+              if (navigator.canPop()) {
+                navigator.popUntil((route) => route.isFirst);
+              }
+            });
+          }
+        }
         if (user == null) {
           _presenceService?.stop();
           _presenceService = null;

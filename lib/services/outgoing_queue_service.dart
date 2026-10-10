@@ -153,13 +153,16 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
         _storage = storage,
         _settings = settings;
 
-  static const _prefsKey = 'outgoing_queue_v1';
+  static const _prefsPrefix = 'outgoing_queue_v1_';
+
+  String get _prefsKey => '$_prefsPrefix${_uid ?? 'none'}';
 
   final ChatService _chatService;
   final StorageService _storage;
   final SettingsService _settings;
   final List<OutgoingJob> _jobs = [];
   String? _uid;
+  String? lastError;
   bool _pumping = false;
   bool _observing = false;
   String? _activeId;
@@ -189,7 +192,13 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
     }
     _uid = uid;
     await load();
+    _jobs.removeWhere((job) => job.senderId != uid);
+    await _persist();
     unawaited(pump());
+  }
+
+  void clearError() {
+    lastError = null;
   }
 
   void unbind() {
@@ -306,6 +315,10 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
         _activeId = job.id;
         _jobs[index] = job.copyWith(status: 'sending');
         notifyListeners();
+        if (job.senderId != _uid) {
+          await complete(job.id);
+          continue;
+        }
         try {
           await _send(job);
           await complete(job.id);
@@ -315,11 +328,22 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
           await complete(job.id);
         } catch (error) {
           debugPrint('HM_QUEUE_RETRY: $error');
+          final raw = error.toString();
+          final denied = raw.contains('permission-denied') ||
+              raw.contains('PERMISSION_DENIED');
+          if (denied) {
+            lastError = 'Mesaj sunucuya yazılamadı.';
+            await complete(job.id);
+            notifyListeners();
+            continue;
+          }
           if (index < _jobs.length && _jobs[index].id == job.id) {
             _jobs[index] = _jobs[index].copyWith(status: 'queued');
             await _persist();
             notifyListeners();
           }
+          lastError = 'Mesaj gönderilemedi. Bağlantı gelince tekrar denenecek.';
+          notifyListeners();
           _activeId = null;
           _retry?.cancel();
           _retry = Timer(const Duration(seconds: 4), () => unawaited(pump()));

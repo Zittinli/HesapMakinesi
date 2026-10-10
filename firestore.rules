@@ -121,10 +121,12 @@ service cloud.firestore {
     }
 
     function myStaffPerms() {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
       return isSignedIn()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.staffPerms is list
-        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.staffPerms
+        && exists(userPath)
+        && 'staffPerms' in get(userPath).data
+        && get(userPath).data.staffPerms is list
+        ? get(userPath).data.staffPerms
         : [];
     }
 
@@ -133,8 +135,12 @@ service cloud.firestore {
     }
 
     function recordRestricts(data) {
-      return data.bannedPermanently == true
-        || (data.timeoutUntil is timestamp && data.timeoutUntil > request.time);
+      return ('bannedPermanently' in data && data.bannedPermanently == true)
+        || (
+          'timeoutUntil' in data
+          && data.timeoutUntil is timestamp
+          && data.timeoutUntil > request.time
+        );
     }
 
     function isUserBanned() {
@@ -946,19 +952,19 @@ service cloud.firestore {
     }
 
     match /chats/{chatId} {
-      allow get: if isAdmin()
-        || hasStaffPerm('viewGroups')
-        || hasStaffPerm('viewUsers')
-        || (isSignedIn() && (
+      allow get: if (isSignedIn() && (
           !exists(/databases/$(database)/documents/chats/$(chatId))
           || request.auth.uid in resource.data.participants
-        ));
-      allow list: if isAdmin()
+        ))
+        || isAdmin()
         || hasStaffPerm('viewGroups')
-        || hasStaffPerm('viewUsers')
-        || (
+        || hasStaffPerm('viewUsers');
+      allow list: if (
           isSignedIn() && request.auth.uid in resource.data.participants
-        );
+        )
+        || isAdmin()
+        || hasStaffPerm('viewGroups')
+        || hasStaffPerm('viewUsers');
 
       allow create: if isSignedIn()
         && !isUserBanned()
@@ -1014,7 +1020,7 @@ service cloud.firestore {
       allow delete: if false;
 
       match /messages/{messageId} {
-        allow read: if isAdmin() || isChatParticipant(chatId);
+        allow read: if isChatParticipant(chatId) || isAdmin();
 
         allow create: if isChatParticipant(chatId)
           && chatNotBlocked(chatId)
@@ -1118,7 +1124,7 @@ service cloud.firestore {
     }
 
     match /moderation/{userId} {
-      allow read: if isAdmin() || hasStaffPerm('punishReports') || hasStaffPerm('viewReports') || isSelf(userId);
+      allow read: if isSelf(userId) || isAdmin() || hasStaffPerm('punishReports') || hasStaffPerm('viewReports');
       allow create, update: if (isAdmin() || hasStaffPerm('punishReports'))
         && userId != 'RUwHPHB6HRdy3l6jBsIexmDHYAB3'
         && isValidModeration(request.resource.data);
@@ -1126,7 +1132,7 @@ service cloud.firestore {
     }
 
     match /bannedEmails/{userEmail} {
-      allow read: if isAdmin() || hasStaffPerm('punishReports') || hasStaffPerm('viewReports') || authEmailLower() == userEmail;
+      allow read: if authEmailLower() == userEmail || isAdmin() || hasStaffPerm('punishReports') || hasStaffPerm('viewReports');
       allow create, update: if (isAdmin() || hasStaffPerm('punishReports'))
         && userEmail != 'zttnlnkc@gmail.com'
         && isValidModeration(request.resource.data);

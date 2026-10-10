@@ -310,6 +310,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     final queue = _queue;
     if (queue == null) return;
+    final error = queue.lastError;
+    if (error != null) {
+      queue.clearError();
+      _showNotice(error);
+    }
     setState(() {
       _pendingOutgoing
         ..clear()
@@ -341,7 +346,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _showNotice(error.message);
       }
       return;
-    }
+    } catch (_) {}
     if (!mounted) return;
 
     final editing = _editingMessage;
