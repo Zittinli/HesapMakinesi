@@ -37,6 +37,16 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
     WidgetsBinding.instance.addObserver(this);
     if (widget.isVideo) {
       final local = widget.file;
+      final remote = widget.url.startsWith('http://') ||
+          widget.url.startsWith('https://');
+      if (local == null && !remote) {
+        _error = 'Video açılamadı.';
+        return;
+      }
+      if (local != null && !local.existsSync()) {
+        _error = 'Video açılamadı.';
+        return;
+      }
       final controller = local != null
           ? VideoPlayerController.file(local)
           : VideoPlayerController.networkUrl(Uri.parse(widget.url));
@@ -198,7 +208,20 @@ class _MediaViewerScreenState extends State<MediaViewerScreen>
       minScale: 0.8,
       maxScale: 5,
       child: local != null
-          ? Image.file(local, fit: BoxFit.contain)
+          ? Image.file(
+              local,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const Text(
+                'Fotoğraf açılamadı.',
+                style: TextStyle(color: Colors.white54),
+              ),
+            )
+          : !widget.url.startsWith('http://') &&
+                !widget.url.startsWith('https://')
+          ? const Text(
+              'Fotoğraf açılamadı.',
+              style: TextStyle(color: Colors.white54),
+            )
           : CachedNetworkImage(
               imageUrl: widget.url,
               fit: BoxFit.contain,

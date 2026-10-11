@@ -23,6 +23,7 @@ import 'typing_bubble.dart';
 import '../settings/admin_home_screen.dart';
 import '../settings/settings_screen.dart';
 import '../../widgets/profile_avatar.dart';
+import '../../widgets/profile_photo_view.dart';
 
 class SecretHubScreen extends StatefulWidget {
   const SecretHubScreen({super.key, required this.onExitToCalculator});
@@ -1122,15 +1123,31 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                           Stack(
                             clipBehavior: Clip.none,
                             children: [
-                              ProfileAvatar(
-                                name: title,
-                                photoUrl: chat.isGroup
-                                    ? chat.visibleGroupPhotoUrl
-                                    : otherUser?.visiblePhotoUrl,
-                                hidden: chat.isGroup
-                                    ? false
-                                    : (otherUser?.photoHidden ?? false),
-                                radius: 20,
+                              GestureDetector(
+                                onTap: () {
+                                  final photo = chat.isGroup
+                                      ? chat.visibleGroupPhotoUrl
+                                      : otherUser?.visiblePhotoUrl;
+                                  if (photo == null || photo.isEmpty) {
+                                    widget.onOpen(chat, title);
+                                    return;
+                                  }
+                                  openProfilePhoto(
+                                    context,
+                                    title: title,
+                                    url: photo,
+                                  );
+                                },
+                                child: ProfileAvatar(
+                                  name: title,
+                                  photoUrl: chat.isGroup
+                                      ? chat.visibleGroupPhotoUrl
+                                      : otherUser?.visiblePhotoUrl,
+                                  hidden: chat.isGroup
+                                      ? false
+                                      : (otherUser?.photoHidden ?? false),
+                                  radius: 20,
+                                ),
                               ),
                               if (nowTyping)
                                 const Positioned(

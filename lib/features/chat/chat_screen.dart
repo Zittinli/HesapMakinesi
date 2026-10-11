@@ -26,6 +26,8 @@ import '../../services/nudge_service.dart';
 import '../../services/outgoing_queue_service.dart';
 import '../../services/settings_service.dart';
 import '../../services/storage_service.dart';
+import '../../widgets/profile_avatar.dart';
+import '../../widgets/profile_photo_view.dart';
 import 'chat_search_screen.dart';
 import 'force_lock_button.dart';
 import 'group_details_screen.dart';
@@ -66,7 +68,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
@@ -102,6 +104,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, String> _clientKeys = {};
   final Map<String, Future<AppUser?>> _userFutures = {};
   bool _showJumpDown = false;
+  bool _pinnedToBottom = true;
+  double _keyboardInset = 0;
   final Set<String> _downloadingMediaIds = {};
   final Set<String> _selectedMessageIds = {};
   String? _notice;
@@ -146,6 +150,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _messageController.addListener(_onComposerChanged);
     _focusNode.addListener(_onComposerFocus);
     _scrollController.addListener(_onScrollOffset);
@@ -161,6 +166,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _queue?.removeListener(_pullQueue);
     _idleTimer?.cancel();
     _typingDebounce?.cancel();
@@ -188,9 +194,22 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) setState(() {});
     if (_focusNode.hasFocus) {
       _holdIdleWhileTyping();
+      if (_pinnedToBottom) _scrollToBottom();
       return;
     }
     _endTypingAndStartIdle();
+  }
+
+  @override
+  void didChangeMetrics() {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) return;
+    final view = views.first;
+    final inset = view.viewInsets.bottom / view.devicePixelRatio;
+    final changed = (inset - _keyboardInset).abs() > 40;
+    _keyboardInset = inset;
+    if (!changed || !_pinnedToBottom || _pendingJumpId != null) return;
+    _scrollToBottom();
   }
 
   void _onComposerChanged() {
@@ -536,18 +555,23 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) setState(() => _replyTo = null);
     _bumpIdle();
     if (!_showJumpDown) _scrollToBottom();
-    await queue.enqueueMedia(
-      senderId: uid,
-      chatId: widget.chatId,
-      file: captured.file,
-      type: type,
-      contentType: captured.contentType,
-      pendingEmail: widget.pendingEmail ?? '',
-      replyTo: reply,
-      expireSeconds: ttl,
-      fileName: fileName,
-      fileSize: fileSize,
-    );
+    try {
+      await queue.enqueueMedia(
+        senderId: uid,
+        chatId: widget.chatId,
+        file: captured.file,
+        type: type,
+        contentType: captured.contentType,
+        pendingEmail: widget.pendingEmail ?? '',
+        replyTo: reply,
+        expireSeconds: ttl,
+        fileName: fileName,
+        fileSize: fileSize,
+      );
+    } catch (error) {
+      debugPrint('HM_MEDIA_ENQUEUE_FAILED: $error');
+      if (mounted) _showNotice('Medya hazırlanamadı.');
+    }
   }
 
   Future<void> _showPersonDetails() async {
@@ -563,6 +587,8 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       backgroundColor: const Color(0xFF161616),
       builder: (context) {
+        final photo = user?.visiblePhotoUrl ?? '';
+        final name = user?.visibleName ?? widget.otherUserName;
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -570,6 +596,35 @@ class _ChatScreenState extends State<ChatScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (photo.isNotEmpty) ...[
+                  Center(
+                    child: GestureDetector(
+                      onTap: () => openProfilePhoto(
+                        context,
+                        title: name,
+                        url: photo,
+                      ),
+                      child: ProfileAvatar(
+                        name: name,
+                        photoUrl: photo,
+                        radius: 42,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: TextButton.icon(
+                      onPressed: () => saveProfilePhoto(
+                        context,
+                        photo,
+                        cacheId: 'profile_${user?.id ?? photo.hashCode}',
+                      ),
+                      icon: const Icon(Icons.download_outlined, size: 18),
+                      label: const Text('Fotoğrafı indir'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 Text(
                   user?.visibleName ?? widget.otherUserName,
                   style: const TextStyle(color: Colors.white, fontSize: 18),
@@ -760,17 +815,45 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _onScrollOffset() {
     if (!_scrollController.hasClients) return;
-    final away = _scrollController.offset > 120;
-    if (away != _showJumpDown && mounted) {
-      setState(() => _showJumpDown = away);
-    }
     final position = _scrollController.position;
+    if (position.pixels <= 64) {
+      _pinnedToBottom = true;
+      if (_showJumpDown && mounted) {
+        setState(() => _showJumpDown = false);
+      }
+    }
     if (position.pixels >= position.maxScrollExtent - 320) {
       _loadOlderMessages();
     }
   }
 
+  bool _onListScroll(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return false;
+    final offset = notification.metrics.pixels;
+    if (offset <= 64) {
+      _pinnedToBottom = true;
+      if (_showJumpDown && mounted) {
+        setState(() => _showJumpDown = false);
+      }
+      return false;
+    }
+    final dragged = notification is ScrollUpdateNotification &&
+        notification.dragDetails != null;
+    final flung = notification is ScrollEndNotification && !_pinnedToBottom;
+    if ((dragged || flung) && offset > 120) {
+      _pinnedToBottom = false;
+      if (!_showJumpDown && mounted) {
+        setState(() => _showJumpDown = true);
+      }
+    }
+    return false;
+  }
+
   void _scrollToBottom() {
+    _pinnedToBottom = true;
+    if (_showJumpDown && mounted) {
+      setState(() => _showJumpDown = false);
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
       _scrollController.jumpTo(0);
@@ -853,6 +936,7 @@ class _ChatScreenState extends State<ChatScreen> {
   ) async {
     if (messageId.isEmpty) return;
     _pendingJumpId = messageId;
+    _pinnedToBottom = false;
     _showJumpDown = true;
 
     bool matches(ChatMessage message) =>
@@ -1590,13 +1674,25 @@ class _ChatScreenState extends State<ChatScreen> {
     for (final key in keys) {
       if (key.isEmpty) continue;
       if (message.isLocalMediaFile && key == message.mediaUrl) {
-        if (File(key).existsSync()) return key;
+        final file = File(key);
+        if (file.existsSync() && file.lengthSync() > 0) return key;
         continue;
       }
       final path = settings.mediaFilePath(key);
-      if (path != null && File(path).existsSync()) return path;
+      if (path != null && _cacheFileOk(path, message.fileSize)) return path;
     }
     return null;
+  }
+
+  bool _cacheFileOk(String path, int? expectedSize) {
+    final file = File(path);
+    if (!file.existsSync()) return false;
+    final length = file.lengthSync();
+    if (length <= 0) return false;
+    if (expectedSize != null && expectedSize > 0 && length < expectedSize) {
+      return false;
+    }
+    return true;
   }
 
   Future<void> _openMedia(ChatMessage message) async {
@@ -1607,37 +1703,51 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     final settings = context.read<SettingsService>();
-    final local = _cachedMediaPath(message, settings);
-    final uid = _myUid;
-    final mine = message.senderId == uid;
-    final downloaded = settings.isMediaDownloaded(message.id) ||
-        (uid != null && message.downloadedBy.contains(uid));
-    if (local == null && !mine && !downloaded) {
-      await _downloadMedia(message);
-      return;
-    }
-    if (local == null && !message.isHttpMedia) {
-      await _downloadMedia(message);
+    final existing = _cachedMediaPath(message, settings);
+    if (existing != null) {
       if (!mounted) return;
-      final cached = _cachedMediaPath(message, context.read<SettingsService>());
-      if (cached == null) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => MediaViewerScreen(
-            url: url,
-            file: File(cached),
-            isVideo: message.type == MessageType.video,
-          ),
-        ),
-      );
+      _showMedia(message, File(existing));
       return;
     }
-    if (!mounted) return;
+    if (message.isLocalMediaFile) {
+      _showNotice('Medya dosyası bulunamadı.');
+      return;
+    }
+    final messageId = message.id;
+    if (messageId.isNotEmpty && mounted) {
+      setState(() => _downloadingMediaIds.add(messageId));
+    }
+    try {
+      final file = await context.read<StorageService>().downloadToCache(
+        locator: url,
+        messageId: messageId.isEmpty
+            ? '${DateTime.now().microsecondsSinceEpoch}'
+            : messageId,
+        fileName: message.fileName,
+        expectedSize: message.fileSize,
+      );
+      await settings.rememberMediaFile(
+        [messageId, message.clientKey ?? '', url],
+        file.path,
+      );
+      if (!mounted) return;
+      _showMedia(message, file);
+    } catch (error) {
+      debugPrint('HM_MEDIA_OPEN_FAILED: $error');
+      if (mounted) _showNotice('Medya açılamadı.');
+    } finally {
+      if (mounted && messageId.isNotEmpty) {
+        setState(() => _downloadingMediaIds.remove(messageId));
+      }
+    }
+  }
+
+  void _showMedia(ChatMessage message, File file) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MediaViewerScreen(
-          url: url,
-          file: local == null ? null : File(local),
+          url: message.mediaUrl ?? '',
+          file: file,
           isVideo: message.type == MessageType.video,
         ),
       ),
@@ -1667,6 +1777,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ? '${DateTime.now().millisecondsSinceEpoch}'
                     : messageId,
                 fileName: message.fileName,
+                expectedSize: message.fileSize,
               );
         cached = file.path;
         await settings.rememberMediaFile(
@@ -1684,15 +1795,22 @@ class _ChatScreenState extends State<ChatScreen> {
         _showNotice('İndirildi: $cached');
         return;
       }
-      await storage.saveToGallery(
-        File(cached),
-        isVideo: message.type == MessageType.video,
-      );
+      try {
+        await storage.saveToGallery(
+          File(cached),
+          isVideo: message.type == MessageType.video,
+        );
+      } catch (error) {
+        debugPrint('HM_GALLERY_SAVE_FAILED: $error');
+        if (mounted) _showNotice('Galeriye kaydedilemedi.');
+        return;
+      }
       if (!mounted) return;
       await _rememberDownload(message);
       if (!mounted) return;
       _showNotice('Galeriye indirildi.');
-    } catch (_) {
+    } catch (error) {
+      debugPrint('HM_MEDIA_DOWNLOAD_FAILED: $error');
       if (!mounted) return;
       _showNotice('Medya indirilemedi.');
     } finally {
@@ -2136,6 +2254,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               if (!mounted) return;
                               if (unreadId != null) {
+                                _pinnedToBottom = false;
                                 _showJumpDown = true;
                                 _jumpToMessage(unreadId, messages);
                               } else {
@@ -2157,7 +2276,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         }
 
                         final reversed = messages.reversed.toList();
-                        return ListView.builder(
+                        return NotificationListener<ScrollNotification>(
+                          onNotification: _onListScroll,
+                          child: ListView.builder(
                           controller: _scrollController,
                           reverse: true,
                           cacheExtent: _pendingJumpId == null ? 400 : 12000,
@@ -2330,6 +2451,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               ],
                             );
                           },
+                        ),
                         );
                       },
                     ),

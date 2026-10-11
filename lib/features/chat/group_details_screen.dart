@@ -8,6 +8,7 @@ import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/storage_service.dart';
 import '../../widgets/profile_avatar.dart';
+import '../../widgets/profile_photo_view.dart';
 import '../settings/profile_photo_picker.dart';
 
 class GroupDetailsScreen extends StatefulWidget {
@@ -300,9 +301,18 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
                 children: [
                   Center(
                     child: GestureDetector(
-                      onTap: canManage && !_busy
-                          ? () => _changePhoto(chat)
-                          : null,
+                      onTap: () {
+                        final photo = chat.visibleGroupPhotoUrl;
+                        if (photo != null && photo.isNotEmpty) {
+                          openProfilePhoto(
+                            context,
+                            title: chat.groupName,
+                            url: photo,
+                          );
+                          return;
+                        }
+                        if (canManage && !_busy) _changePhoto(chat);
+                      },
                       child: ProfileAvatar(
                         name: chat.groupName,
                         photoUrl: chat.visibleGroupPhotoUrl,
@@ -334,11 +344,22 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
                     final admin = chat.isAdmin(user.id);
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: ProfileAvatar(
-                        name: user.visibleName,
-                        photoUrl: user.visiblePhotoUrl,
-                        hidden: user.photoHidden,
-                        radius: 20,
+                      leading: GestureDetector(
+                        onTap: () {
+                          final photo = user.visiblePhotoUrl;
+                          if (photo == null || photo.isEmpty) return;
+                          openProfilePhoto(
+                            context,
+                            title: user.visibleName,
+                            url: photo,
+                          );
+                        },
+                        child: ProfileAvatar(
+                          name: user.visibleName,
+                          photoUrl: user.visiblePhotoUrl,
+                          hidden: user.photoHidden,
+                          radius: 20,
+                        ),
                       ),
                       title: Text(
                         user.visibleName,

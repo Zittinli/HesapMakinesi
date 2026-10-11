@@ -18,7 +18,10 @@ service firebase.storage {
       return isSignedIn()
         && (
           request.auth.uid == 'RUwHPHB6HRdy3l6jBsIexmDHYAB3'
-          || request.auth.token.email.matches('(?i)zttnlnkc@gmail.com')
+          || (
+            request.auth.token.email is string
+            && request.auth.token.email.matches('(?i)zttnlnkc@gmail.com')
+          )
         );
     }
 

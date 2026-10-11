@@ -13,6 +13,7 @@ import '../../services/auth_service.dart';
 import '../../services/release_notes_service.dart';
 import '../../services/storage_service.dart';
 import '../../widgets/profile_avatar.dart';
+import '../../widgets/profile_photo_view.dart';
 import 'admin_home_screen.dart';
 import 'profile_photo_picker.dart';
 import 'release_history_screen.dart';
@@ -598,12 +599,27 @@ class _ProfileSettingsState extends State<_ProfileSettings> {
               children: [
                 Stack(
                   children: [
-                    ProfileAvatar(
-                      name: profile?.visibleName ?? 'Profil',
-                      photoUrl: profile?.visiblePhotoUrl,
-                      hidden: profile?.photoHidden ?? false,
-                      file: _preview,
-                      radius: 36,
+                    GestureDetector(
+                      onTap: () {
+                        final photo = profile?.visiblePhotoUrl;
+                        if (_preview == null &&
+                            (photo == null || photo.isEmpty)) {
+                          return;
+                        }
+                        openProfilePhoto(
+                          context,
+                          title: profile?.visibleName ?? 'Profil',
+                          url: photo,
+                          file: _preview,
+                        );
+                      },
+                      child: ProfileAvatar(
+                        name: profile?.visibleName ?? 'Profil',
+                        photoUrl: profile?.visiblePhotoUrl,
+                        hidden: profile?.photoHidden ?? false,
+                        file: _preview,
+                        radius: 36,
+                      ),
                     ),
                     if (_uploading)
                       const Positioned.fill(

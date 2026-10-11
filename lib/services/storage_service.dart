@@ -144,6 +144,7 @@ class StorageService {
     required String locator,
     required String messageId,
     String? fileName,
+    int? expectedSize,
   }) async {
     final dir = await getApplicationDocumentsDirectory();
     final folder = Directory(p.join(dir.path, 'media_cache'));
@@ -153,11 +154,38 @@ class StorageService {
     final ext = p.extension(fileName ?? locator);
     final safe = messageId.replaceAll(RegExp(r'[^\w.\-]+'), '_');
     final dest = File(p.join(folder.path, '$safe$ext'));
-    if (await dest.exists() && await dest.length() > 0) {
-      return dest;
+    if (await _cacheIsComplete(dest, expectedSize)) return dest;
+    await _deleteQuiet(dest);
+    final part = File('${dest.path}.part');
+    await _deleteQuiet(part);
+    try {
+      await refFor(locator).writeToFile(part);
+    } catch (error) {
+      await _deleteQuiet(part);
+      rethrow;
     }
-    await refFor(locator).writeToFile(dest);
-    return dest;
+    if (!await part.exists() || await part.length() <= 0) {
+      await _deleteQuiet(part);
+      throw const FileSystemException('Medya dosyası eksik indi.');
+    }
+    await _deleteQuiet(dest);
+    return part.rename(dest.path);
+  }
+
+  Future<bool> _cacheIsComplete(File file, int? expectedSize) async {
+    if (!await file.exists()) return false;
+    final length = await file.length();
+    if (length <= 0) return false;
+    if (expectedSize != null && expectedSize > 0 && length < expectedSize) {
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _deleteQuiet(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
   }
 
   Future<void> downloadToGallery({

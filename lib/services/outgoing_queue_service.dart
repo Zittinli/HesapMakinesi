@@ -12,6 +12,47 @@ import 'chat_service.dart';
 import 'settings_service.dart';
 import 'storage_service.dart';
 
+enum OutgoingFailureKind { retry, drop }
+
+OutgoingFailureKind classifyOutgoingFailure(Object error) {
+  if (error is FileSystemException || error is ChatBlockedException) {
+    return OutgoingFailureKind.drop;
+  }
+  final raw = error.toString().toLowerCase();
+  if (error is MediaUploadException) {
+    const retryCodes = [
+      '(unknown)',
+      '(retry-limit-exceeded)',
+      '(unavailable)',
+      '(deadline-exceeded)',
+      '(cancelled)',
+      '(canceled)',
+      '(internal)',
+      '(network-request-failed)',
+    ];
+    for (final code in retryCodes) {
+      if (raw.contains(code)) return OutgoingFailureKind.retry;
+    }
+    if (raw == 'medya yüklenemedi.') return OutgoingFailureKind.retry;
+    return OutgoingFailureKind.drop;
+  }
+  const permanent = [
+    'permission-denied',
+    'permission_denied',
+    'unauthenticated',
+    'unauthorized',
+    'invalid-argument',
+    'failed-precondition',
+    'not-found',
+    'object-not-found',
+    'quota-exceeded',
+  ];
+  for (final code in permanent) {
+    if (raw.contains(code)) return OutgoingFailureKind.drop;
+  }
+  return OutgoingFailureKind.retry;
+}
+
 class OutgoingJob {
   const OutgoingJob({
     required this.id,
@@ -29,6 +70,9 @@ class OutgoingJob {
     this.fileName,
     this.fileSize,
     this.fileMime,
+    this.remotePath,
+    this.attempts = 0,
+    this.nextAttemptMs = 0,
     this.status = 'queued',
   });
 
@@ -47,6 +91,9 @@ class OutgoingJob {
   final String? fileName;
   final int? fileSize;
   final String? fileMime;
+  final String? remotePath;
+  final int attempts;
+  final int nextAttemptMs;
   final String status;
 
   bool get isMedia =>
@@ -82,7 +129,14 @@ class OutgoingJob {
     );
   }
 
-  OutgoingJob copyWith({String? status, String? localPath, int? fileSize}) {
+  OutgoingJob copyWith({
+    String? status,
+    String? localPath,
+    int? fileSize,
+    String? remotePath,
+    int? attempts,
+    int? nextAttemptMs,
+  }) {
     return OutgoingJob(
       id: id,
       senderId: senderId,
@@ -99,6 +153,9 @@ class OutgoingJob {
       fileName: fileName,
       fileSize: fileSize ?? this.fileSize,
       fileMime: fileMime,
+      remotePath: remotePath ?? this.remotePath,
+      attempts: attempts ?? this.attempts,
+      nextAttemptMs: nextAttemptMs ?? this.nextAttemptMs,
       status: status ?? this.status,
     );
   }
@@ -119,6 +176,9 @@ class OutgoingJob {
         'fileName': fileName,
         'fileSize': fileSize,
         'fileMime': fileMime,
+        'remotePath': remotePath,
+        'attempts': attempts,
+        'nextAttemptMs': nextAttemptMs,
         'status': status,
       };
 
@@ -139,6 +199,9 @@ class OutgoingJob {
       fileName: json['fileName'] as String?,
       fileSize: (json['fileSize'] as num?)?.toInt(),
       fileMime: json['fileMime'] as String?,
+      remotePath: json['remotePath'] as String?,
+      attempts: (json['attempts'] as num?)?.toInt() ?? 0,
+      nextAttemptMs: (json['nextAttemptMs'] as num?)?.toInt() ?? 0,
       status: json['status'] as String? ?? 'queued',
     );
   }
@@ -307,11 +370,17 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
     if (_pumping) return;
     _pumping = true;
     _retry?.cancel();
+    _retry = null;
     try {
+      final touched = <String>{};
       while (_uid != null) {
-        final index = _jobs.indexWhere((job) => job.status != 'sent');
-        if (index < 0) return;
-        var job = _jobs[index];
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final index = _jobs.indexWhere(
+          (job) => job.nextAttemptMs <= now && !touched.contains(job.id),
+        );
+        if (index < 0) break;
+        final job = _jobs[index];
+        touched.add(job.id);
         _activeId = job.id;
         _jobs[index] = job.copyWith(status: 'sending');
         notifyListeners();
@@ -324,37 +393,73 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
           await complete(job.id);
         } on ChatBlockedException {
           await complete(job.id);
-        } on FileSystemException {
-          await complete(job.id);
         } catch (error) {
           debugPrint('HM_QUEUE_RETRY: $error');
-          final raw = error.toString();
-          final denied = raw.contains('permission-denied') ||
-              raw.contains('PERMISSION_DENIED');
-          if (denied) {
-            lastError = 'Mesaj sunucuya yazılamadı.';
+          final current = _jobs.indexWhere((item) => item.id == job.id);
+          if (current < 0) continue;
+          final attempts = _jobs[current].attempts + 1;
+          final kind = classifyOutgoingFailure(error);
+          final giveUp =
+              kind == OutgoingFailureKind.drop || (job.isMedia && attempts >= 5);
+          if (giveUp) {
+            lastError = _dropNotice(job, error);
             await complete(job.id);
             notifyListeners();
             continue;
           }
-          if (index < _jobs.length && _jobs[index].id == job.id) {
-            _jobs[index] = _jobs[index].copyWith(status: 'queued');
-            await _persist();
-            notifyListeners();
+          final waitSec = attempts <= 2 ? 4 : 12;
+          _jobs[current] = _jobs[current].copyWith(
+            status: 'queued',
+            attempts: attempts,
+            nextAttemptMs:
+                DateTime.now().millisecondsSinceEpoch + waitSec * 1000,
+          );
+          await _persist();
+          if (attempts == 1) {
+            lastError = job.isMedia
+                ? 'Medya gönderilemedi. Bağlantı gelince tekrar denenecek.'
+                : 'Mesaj gönderilemedi. Bağlantı gelince tekrar denenecek.';
           }
-          lastError = 'Mesaj gönderilemedi. Bağlantı gelince tekrar denenecek.';
           notifyListeners();
-          _activeId = null;
-          _retry?.cancel();
-          _retry = Timer(const Duration(seconds: 4), () => unawaited(pump()));
-          return;
         }
       }
+      _armRetry();
     } finally {
       _activeId = null;
       _pumping = false;
       notifyListeners();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (_uid != null && _jobs.any((job) => job.nextAttemptMs <= now)) {
+        unawaited(pump());
+      }
     }
+  }
+
+  void _armRetry() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    int? soonest;
+    for (final job in _jobs) {
+      if (job.nextAttemptMs <= now) continue;
+      if (soonest == null || job.nextAttemptMs < soonest) {
+        soonest = job.nextAttemptMs;
+      }
+    }
+    if (soonest == null) return;
+    final waitMs = (soonest - now).clamp(500, 30000);
+    _retry = Timer(
+      Duration(milliseconds: waitMs),
+      () => unawaited(pump()),
+    );
+  }
+
+  String _dropNotice(OutgoingJob job, Object error) {
+    final raw = error.toString();
+    if (error is FileSystemException) {
+      return 'Dosya bulunamadı, gönderilemedi.';
+    }
+    if (error is MediaUploadException && raw.contains('75 MB')) return raw;
+    if (job.isMedia) return 'Medya gönderilemedi.';
+    return 'Mesaj sunucuya yazılamadı.';
   }
 
   Future<void> _send(OutgoingJob job) async {
@@ -389,7 +494,8 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
       }
       return;
     }
-    final path = job.localPath;
+    final live = _liveJob(job);
+    final path = live.localPath;
     if (path == null || path.isEmpty) {
       throw const FileSystemException('Kuyruk dosyası yok.');
     }
@@ -397,27 +503,31 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
     if (!file.existsSync()) {
       throw const FileSystemException('Kuyruk dosyası silinmiş.');
     }
-    final folder = job.chatId.isNotEmpty
-        ? 'chat_media/${job.chatId}'
-        : 'pending_media/${ChatService.emailKey(job.pendingEmail.isEmpty ? job.senderId : job.pendingEmail)}';
+    final folder = live.chatId.isNotEmpty
+        ? 'chat_media/${live.chatId}'
+        : 'pending_media/${ChatService.emailKey(live.pendingEmail.isEmpty ? live.senderId : live.pendingEmail)}';
     String? cachedPath;
     try {
       cachedPath = (await _storage.persistChatFile(
-        id: job.id,
+        id: live.id,
         file: file,
-        fileName: job.fileName,
+        fileName: live.fileName,
       )).path;
     } catch (_) {}
-    final url = await _storage.uploadChatMedia(
-      folder: folder,
-      file: file,
-      contentType: job.fileMime ?? 'application/octet-stream',
-      fileName: job.fileName,
-      ownerId: job.senderId,
-    );
+    final existing = (live.remotePath ?? '').trim();
+    final url = existing.isNotEmpty
+        ? existing
+        : await _storage.uploadChatMedia(
+            folder: folder,
+            file: file,
+            contentType: live.fileMime ?? 'application/octet-stream',
+            fileName: live.fileName,
+            ownerId: live.senderId,
+          );
+    _rememberRemote(live.id, url);
     if (cachedPath != null) {
       try {
-        await _settings.rememberMediaFile([job.id, url], cachedPath);
+        await _settings.rememberMediaFile([live.id, url], cachedPath);
       } catch (_) {}
     }
     final size = job.fileSize ?? await file.length();
@@ -456,12 +566,31 @@ class OutgoingQueueService extends ChangeNotifier with WidgetsBindingObserver {
     }
     final ext = p.extension(fileName ?? file.path);
     final dest = File(p.join(folder.path, '$id$ext'));
-    try {
-      await file.copy(dest.path);
-      return dest.path;
-    } catch (_) {
-      return file.path;
+    if (file.path != dest.path) {
+      try {
+        await file.copy(dest.path);
+      } catch (_) {
+        await dest.writeAsBytes(await file.readAsBytes());
+      }
     }
+    if (!dest.existsSync() || await dest.length() <= 0) {
+      throw const FileSystemException('Medya kopyalanamadı.');
+    }
+    return dest.path;
+  }
+
+  OutgoingJob _liveJob(OutgoingJob job) {
+    final index = _jobs.indexWhere((item) => item.id == job.id);
+    if (index < 0) return job;
+    return _jobs[index];
+  }
+
+  void _rememberRemote(String id, String url) {
+    final index = _jobs.indexWhere((item) => item.id == id);
+    if (index < 0 || url.isEmpty) return;
+    if (_jobs[index].remotePath == url) return;
+    _jobs[index] = _jobs[index].copyWith(remotePath: url);
+    unawaited(_persist());
   }
 
   Future<void> _deleteStash(String? path) async {

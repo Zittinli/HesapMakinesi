@@ -11,6 +11,7 @@ import 'package:hesap_makinesi/models/report_model.dart';
 import 'package:hesap_makinesi/models/user_model.dart';
 import 'package:hesap_makinesi/services/chat_service.dart';
 import 'package:hesap_makinesi/services/outgoing_queue_service.dart';
+import 'package:hesap_makinesi/services/storage_service.dart';
 
 void main() {
   group('ChatFormat', () {
@@ -611,6 +612,55 @@ void main() {
       expect(photo.isMedia, isTrue);
       expect(photo.toMessage().mediaUrl, '/tmp/a.jpg');
       expect(photo.toMessage().pendingWrite, isTrue);
+    });
+
+    test('eski kuyruk kaydi yeni alanlarsiz acilir', () {
+      final copy = OutgoingJob.fromJson({
+        'id': 'local-3',
+        'senderId': 'u1',
+        'createdAtMs': 5,
+        'text': 'Fotoğraf',
+        'type': 'image',
+        'chatId': 'c1',
+        'localPath': '/tmp/a.jpg',
+      });
+      expect(copy.attempts, 0);
+      expect(copy.nextAttemptMs, 0);
+      expect(copy.remotePath, isNull);
+      expect(copy.isMedia, isTrue);
+    });
+  });
+
+  group('classifyOutgoingFailure', () {
+    test('takilan medya kalici hatada birakilir, ag hatasinda tekrar denenir', () {
+      expect(
+        classifyOutgoingFailure(
+          const MediaUploadException('Medya yüklenemedi (unauthorized).'),
+        ),
+        OutgoingFailureKind.drop,
+      );
+      expect(
+        classifyOutgoingFailure(
+          const MediaUploadException(
+            'Dosya 75 MB sınırını aşıyor. Daha küçük bir dosya deneyin.',
+          ),
+        ),
+        OutgoingFailureKind.drop,
+      );
+      expect(
+        classifyOutgoingFailure(
+          const MediaUploadException('Medya yüklenemedi (unavailable).'),
+        ),
+        OutgoingFailureKind.retry,
+      );
+      expect(
+        classifyOutgoingFailure(Exception('[cloud_firestore/unavailable]')),
+        OutgoingFailureKind.retry,
+      );
+      expect(
+        classifyOutgoingFailure(Exception('permission-denied')),
+        OutgoingFailureKind.drop,
+      );
     });
   });
 
