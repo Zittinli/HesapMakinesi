@@ -11,6 +11,7 @@ import 'services/auth_service.dart';
 import 'services/chat_service.dart';
 import 'services/force_lock_service.dart';
 import 'services/notification_service.dart';
+import 'services/peer_profile_cache.dart';
 import 'services/nudge_haptic.dart';
 import 'services/nudge_service.dart';
 import 'services/settings_service.dart';
@@ -41,6 +42,7 @@ Future<void> main() async {
   final authService = AuthService();
   final chatService = ChatService();
   await settings.load();
+  await PeerProfileCache.instance.hydrate(authService.currentUser?.uid);
 
   final notificationService = NotificationService(
     settings: settings,

@@ -15,6 +15,7 @@ import '../../models/pending_thread_model.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/peer_profile_cache.dart';
 import '../../services/nudge_service.dart';
 import '../../services/settings_service.dart';
 import '../chat/chat_screen.dart';
@@ -409,7 +410,10 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
     await _openChat(
       chatId: chat.id,
       otherUserId: otherId,
-      otherUserName: other?.visibleName ?? 'Kayıt',
+      otherUserName:
+          other?.visibleName ??
+          PeerProfileCache.instance.lookup(otherId)?.name ??
+          'Kayıt',
       pendingEmail: other?.email,
     );
   }
@@ -455,9 +459,12 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
                         : authService.watchUser(otherId),
                     builder: (context, snapshot) {
                       final user = snapshot.data;
+                      final cached = user == null
+                          ? PeerProfileCache.instance.lookup(otherId)?.name
+                          : null;
                       final label = chat.isGroup
                           ? chat.groupName
-                          : (user?.visibleName ?? 'Gizli kayıt');
+                          : (user?.visibleName ?? cached ?? 'Gizli kayıt');
                       return Text(
                         label,
                         style: const TextStyle(color: Colors.white70),
@@ -497,13 +504,17 @@ class _SecretHubScreenState extends State<SecretHubScreen> {
       final pref = prefs[chat.id] ?? ChatPref.empty(chat.id);
       if (pref.hidden) return false;
       if (query.isEmpty) return true;
-      final other = users[chat.otherParticipantId(currentUserId)];
+      final otherId = chat.otherParticipantId(currentUserId);
+      final other = users[otherId];
+      final cachedName = other == null
+          ? (PeerProfileCache.instance.lookup(otherId)?.name ?? '')
+          : '';
       final haystack = [
         chat.groupName,
         chat.lastMessage,
         other?.email ?? '',
         other?.displayName ?? '',
-        other?.visibleName ?? '',
+        other?.visibleName ?? cachedName,
       ].join(' ').toLowerCase();
       return haystack.contains(query);
     }).toList();
@@ -1029,7 +1040,9 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
 
   void _mergeUsers(List<AppUser?> list) {
     for (final user in list) {
-      if (user != null) _usersById[user.id] = user;
+      if (user == null) continue;
+      _usersById[user.id] = user;
+      PeerProfileCache.instance.remember(widget.currentUserId, user);
     }
   }
 
@@ -1077,9 +1090,18 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                   widget.currentUserId,
                 );
                 final otherUser = users[otherUserId];
+                final cached = otherUser == null
+                    ? PeerProfileCache.instance.lookup(otherUserId)
+                    : null;
                 final title = chat.isGroup
                     ? (chat.groupName.isEmpty ? 'Adsız grup' : chat.groupName)
-                    : (otherUser?.visibleName ?? 'Kullanıcı');
+                    : (otherUser?.visibleName ?? cached?.name ?? 'Kullanıcı');
+                final photoUrl = chat.isGroup
+                    ? chat.visibleGroupPhotoUrl
+                    : (otherUser?.visiblePhotoUrl ?? cached?.visiblePhotoUrl);
+                final photoHidden = chat.isGroup
+                    ? false
+                    : (otherUser?.photoHidden ?? cached?.photoHidden ?? false);
                 final pref = widget.prefs[chat.id] ?? ChatPref.empty(chat.id);
                 final unread = chat.unreadFor(widget.currentUserId);
                 final nudged = context.watch<NudgeService>().hasPending(
@@ -1125,9 +1147,7 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                             children: [
                               GestureDetector(
                                 onTap: () {
-                                  final photo = chat.isGroup
-                                      ? chat.visibleGroupPhotoUrl
-                                      : otherUser?.visiblePhotoUrl;
+                                  final photo = photoUrl;
                                   if (photo == null || photo.isEmpty) {
                                     widget.onOpen(chat, title);
                                     return;
@@ -1140,12 +1160,8 @@ class _ChatRecordsListState extends State<_ChatRecordsList> {
                                 },
                                 child: ProfileAvatar(
                                   name: title,
-                                  photoUrl: chat.isGroup
-                                      ? chat.visibleGroupPhotoUrl
-                                      : otherUser?.visiblePhotoUrl,
-                                  hidden: chat.isGroup
-                                      ? false
-                                      : (otherUser?.photoHidden ?? false),
+                                  photoUrl: photoUrl,
+                                  hidden: photoHidden,
                                   radius: 20,
                                 ),
                               ),

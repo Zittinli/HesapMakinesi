@@ -12,6 +12,7 @@ import '../models/user_model.dart';
 import 'auth_log_service.dart';
 import 'chat_service.dart';
 import 'email_check_service.dart';
+import 'peer_profile_cache.dart';
 
 class AuthService extends ChangeNotifier {
   AuthService({
@@ -46,6 +47,7 @@ class AuthService extends ChangeNotifier {
       if (!requiresEmailVerification) {
         await _claimPending();
       }
+      await PeerProfileCache.instance.hydrate(_auth.currentUser?.uid);
       notifyListeners();
     } on FirebaseAuthException catch (error) {
       await _authLog.log(
@@ -128,6 +130,7 @@ class AuthService extends ChangeNotifier {
         .doc(user.uid)
         .set(appUser.toFirestore());
     await _authLog.log(type: 'sign_up', email: email.trim().toLowerCase());
+    await PeerProfileCache.instance.hydrate(user.uid);
     try {
       await user.sendEmailVerification();
     } catch (error) {
@@ -200,6 +203,7 @@ class AuthService extends ChangeNotifier {
       await _authLog.log(type: 'sign_out', email: email);
     }
     await _auth.signOut();
+    PeerProfileCache.instance.clearMemory();
     notifyListeners();
   }
 
@@ -352,11 +356,19 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  void _rememberPeer(AppUser user) {
+    final owner = _auth.currentUser?.uid;
+    if (owner == null || owner.isEmpty) return;
+    PeerProfileCache.instance.remember(owner, user);
+  }
+
   Future<AppUser?> fetchUser(String userId) async {
     if (userId.isEmpty) return null;
     final doc = await _firestore.collection('users').doc(userId).get();
     if (!doc.exists) return null;
-    return AppUser.fromFirestore(doc);
+    final user = AppUser.fromFirestore(doc);
+    _rememberPeer(user);
+    return user;
   }
 
   Stream<List<AppUser>> watchAllUsers() {
@@ -374,7 +386,9 @@ class AuthService extends ChangeNotifier {
   Stream<AppUser?> watchUser(String userId) {
     return _firestore.collection('users').doc(userId).snapshots().map((doc) {
       if (!doc.exists) return null;
-      return AppUser.fromFirestore(doc);
+      final user = AppUser.fromFirestore(doc);
+      _rememberPeer(user);
+      return user;
     });
   }
 
@@ -396,7 +410,9 @@ class AuthService extends ChangeNotifier {
             .snapshots()
             .listen((snapshot) {
               for (final doc in snapshot.docs) {
-                users[doc.id] = AppUser.fromFirestore(doc);
+                final user = AppUser.fromFirestore(doc);
+                users[doc.id] = user;
+                _rememberPeer(user);
               }
               controller.add(ids.map((id) => users[id]).toList());
             }, onError: controller.addError);

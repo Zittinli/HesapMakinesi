@@ -11,7 +11,9 @@ import 'package:hesap_makinesi/models/report_model.dart';
 import 'package:hesap_makinesi/models/user_model.dart';
 import 'package:hesap_makinesi/services/chat_service.dart';
 import 'package:hesap_makinesi/services/outgoing_queue_service.dart';
+import 'package:hesap_makinesi/services/peer_profile_cache.dart';
 import 'package:hesap_makinesi/services/storage_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('ChatFormat', () {
@@ -681,6 +683,56 @@ void main() {
       ]);
       expect(cleaned, ['👍', '😂', '🔥', '🎉', '💯', '🥰', '😍', '😘']);
       expect(cleaned, hasLength(EmojiCatalog.maxQuick));
+    });
+  });
+
+  group('PeerProfileCache', () {
+    AppUser peer({
+      String id = 'peer',
+      String name = 'Ada',
+      String photoUrl = 'https://cdn.example/a.jpg',
+      bool photoHidden = false,
+    }) {
+      return AppUser(
+        id: id,
+        email: 'ada@mail.com',
+        displayName: name,
+        isOnline: false,
+        lastSeen: null,
+        createdAt: null,
+        photoUrl: photoUrl,
+        photoHidden: photoHidden,
+      );
+    }
+
+    test('adi ve fotografi saklar, baska hesapta gostermez', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      SharedPreferences.setMockInitialValues({});
+      final cache = PeerProfileCache();
+      await cache.hydrate('owner-a');
+      cache.remember('owner-a', peer());
+      cache.remember(
+        'owner-b',
+        peer(id: 'stranger', name: 'Baska'),
+      );
+      expect(cache.lookup('peer')?.name, 'Ada');
+      expect(cache.lookup('peer')?.visiblePhotoUrl, 'https://cdn.example/a.jpg');
+      expect(cache.lookup('stranger'), isNull);
+
+      await cache.flush();
+      final reloaded = PeerProfileCache();
+      await reloaded.hydrate('owner-a');
+      expect(reloaded.lookup('peer')?.name, 'Ada');
+
+      final otherAccount = PeerProfileCache();
+      await otherAccount.hydrate('owner-b');
+      expect(otherAccount.lookup('peer'), isNull);
+
+      reloaded.remember(
+        'owner-a',
+        peer(photoHidden: true),
+      );
+      expect(reloaded.lookup('peer')?.visiblePhotoUrl, isNull);
     });
   });
 }
