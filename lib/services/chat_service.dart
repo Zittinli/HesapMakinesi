@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/chat_model.dart';
+import '../models/starred_message.dart';
 import '../models/chat_pref_model.dart';
 import '../models/message_model.dart';
 import '../core/search_tokens.dart';
@@ -157,6 +158,9 @@ class ChatService {
 
   CollectionReference<Map<String, dynamic>> _prefs(String userId) =>
       _firestore.collection('users').doc(userId).collection('chatPrefs');
+
+  CollectionReference<Map<String, dynamic>> _starred(String userId) =>
+      _firestore.collection('users').doc(userId).collection('starredMessages');
 
   CollectionReference<Map<String, dynamic>> _blocked(String userId) =>
       _firestore.collection('users').doc(userId).collection('blocked');
@@ -1227,14 +1231,54 @@ class ChatService {
     } catch (_) {}
   }
 
+  Future<void> setMessageStarred({
+    required String userId,
+    required String chatId,
+    required ChatMessage message,
+    required bool starred,
+  }) async {
+    final ref = _starred(userId).doc(message.id);
+    if (!starred) {
+      await ref.delete();
+      return;
+    }
+    final createdAt = message.createdAt;
+    if (createdAt == null || message.id.isEmpty || chatId.isEmpty) {
+      throw StateError('Bu mesaj henüz yıldızlanamaz.');
+    }
+    final fileName = _clip(message.fileName, 200);
+    await ref.set({
+      'chatId': chatId,
+      'senderId': message.senderId,
+      'text': _clip(message.preview, 400) ?? '',
+      'type': ChatMessage.typeRaw(message.type),
+      'createdAt': Timestamp.fromDate(createdAt),
+      if (fileName != null && fileName.isNotEmpty) 'fileName': fileName,
+    });
+  }
+
+  Stream<List<StarredMessage>> watchStarred(String userId) {
+    if (userId.isEmpty) return Stream.value(const []);
+    return _starred(userId)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map(StarredMessage.fromFirestore).toList(),
+        );
+  }
+
   Future<void> deleteMessageForMe({
     required String chatId,
     required String messageId,
     required String userId,
-  }) {
-    return _chats.doc(chatId).collection('messages').doc(messageId).update({
+  }) async {
+    await _chats.doc(chatId).collection('messages').doc(messageId).update({
       'deletedFor': FieldValue.arrayUnion([userId]),
     });
+    try {
+      await _starred(userId).doc(messageId).delete();
+    } catch (_) {}
   }
 
   Future<void> deleteMessageForEveryone({
@@ -1248,6 +1292,9 @@ class ChatService {
     } catch (_) {
       await ref.delete();
     }
+    try {
+      await _starred(senderId).doc(messageId).delete();
+    } catch (_) {}
   }
 
   Future<void> purgeExpiredMessages({
@@ -1538,6 +1585,7 @@ class ChatService {
       'incomingNudges',
       'forceLockAllow',
       'incomingForceLocks',
+      'starredMessages',
     ]) {
       final docs = await userRef.collection(name).get();
       await _commitDeletes(docs.docs.map((doc) => doc.reference));

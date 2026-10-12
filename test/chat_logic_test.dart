@@ -5,6 +5,8 @@ import 'package:hesap_makinesi/core/chat_format.dart';
 import 'package:hesap_makinesi/core/staff_perms.dart';
 import 'package:hesap_makinesi/features/settings/admin_search_field.dart';
 import 'package:hesap_makinesi/models/chat_model.dart';
+import 'package:hesap_makinesi/models/chat_pref_model.dart';
+import 'package:hesap_makinesi/models/starred_message.dart';
 import 'package:hesap_makinesi/models/message_model.dart';
 import 'package:hesap_makinesi/models/moderation_model.dart';
 import 'package:hesap_makinesi/models/report_model.dart';
@@ -662,6 +664,59 @@ void main() {
       expect(
         classifyOutgoingFailure(Exception('permission-denied')),
         OutgoingFailureKind.drop,
+      );
+    });
+  });
+
+  group('StarredMessage', () {
+    test('ayarlarda gizli sohbet ve temizlenmis mesaj gizlenir', () {
+      final now = DateTime(2026, 10, 12, 12);
+      final stars = [
+        StarredMessage(
+          messageId: 'gizli',
+          chatId: 'c1',
+          senderId: 'a',
+          text: 'gizli sohbet',
+          type: MessageType.text,
+          createdAt: now,
+        ),
+        StarredMessage(
+          messageId: 'acik',
+          chatId: 'c2',
+          senderId: 'a',
+          text: 'acik',
+          type: MessageType.text,
+          createdAt: now.subtract(const Duration(hours: 1)),
+        ),
+        StarredMessage(
+          messageId: 'eski',
+          chatId: 'c2',
+          senderId: 'a',
+          text: 'eski',
+          type: MessageType.text,
+          createdAt: now.subtract(const Duration(days: 3)),
+        ),
+      ];
+      final prefs = {
+        'c1': const ChatPref(chatId: 'c1', hidden: true),
+        'c2': ChatPref(
+          chatId: 'c2',
+          clearedAt: now.subtract(const Duration(days: 1)),
+        ),
+      };
+
+      expect(
+        visibleStarredMessages(stars: stars, prefs: prefs)
+            .map((star) => star.messageId),
+        ['acik'],
+      );
+      expect(
+        visibleStarredMessages(
+          stars: stars,
+          prefs: prefs,
+          onlyChatId: 'c1',
+        ).map((star) => star.messageId),
+        ['gizli'],
       );
     });
   });

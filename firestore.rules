@@ -17,6 +17,12 @@ rules_version = '2';
 //   - pinned, muted, hidden: bool
 //   - pinnedAt, clearedAt: timestamp | absent
 //
+// Collection: users/{userId}/starredMessages/{messageId}
+//   - chatId, senderId, text, type: string
+//   - createdAt: timestamp
+//   - fileName: string (optional)
+//   Kişiseldir; karşı taraf okuyamaz.
+//
 // Collection: users/{userId}/nudgeAllow/{peerId}
 //   - allow: bool (userId allows peerId to nudge them)
 //   - chatId: string (direct chat)
@@ -600,6 +606,32 @@ service cloud.firestore {
         && request.auth.uid in chatDoc(chatId).data.participants;
     }
 
+    function isValidStar(data) {
+      return data.keys().hasOnly([
+          'chatId',
+          'senderId',
+          'text',
+          'type',
+          'createdAt',
+          'fileName'
+        ])
+        && data.chatId is string
+        && data.chatId.size() > 0
+        && data.chatId.size() <= 128
+        && isChatParticipant(data.chatId)
+        && data.senderId is string
+        && data.senderId.size() > 0
+        && data.senderId.size() <= 128
+        && data.text is string
+        && data.text.size() <= 400
+        && data.type in ['text', 'image', 'video', 'file']
+        && data.createdAt is timestamp
+        && (
+          !('fileName' in data)
+          || (data.fileName is string && data.fileName.size() <= 200)
+        );
+    }
+
     function chatNotBlocked(chatId) {
       return !exists(/databases/$(database)/documents/chats/$(chatId))
         || !('blockedBy' in chatDoc(chatId).data)
@@ -831,6 +863,13 @@ service cloud.firestore {
         allow read: if isSelf(userId);
         allow create, update: if isSelf(userId)
           && isValidChatPref(request.resource.data);
+        allow delete: if isSelf(userId);
+      }
+
+      match /starredMessages/{messageId} {
+        allow read: if isSelf(userId);
+        allow create, update: if isSelf(userId)
+          && isValidStar(request.resource.data);
         allow delete: if isSelf(userId);
       }
 

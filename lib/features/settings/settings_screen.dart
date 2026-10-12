@@ -20,6 +20,7 @@ import 'release_history_screen.dart';
 import 'notification_settings_screen.dart';
 import 'privacy_settings_screen.dart';
 import 'theme_settings_screen.dart';
+import 'starred_messages_screen.dart';
 import 'unlock_code_settings_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -133,6 +134,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 8),
           const Divider(color: Color(0xFF222222)),
           const SizedBox(height: 8),
+          _SettingsLinkTile(
+            title: 'Yıldızlı mesajlar',
+            subtitle: 'Tarihe göre. Gizli sohbetler burada görünmez.',
+            onTap: () => _open(
+              StarredMessagesScreen(
+                onExitToCalculator: widget.onExitToCalculator,
+              ),
+            ),
+          ),
           _SettingsLinkTile(
             title: 'Gizlilik',
             subtitle: 'Kim neleri görebilir, sohbet nasıl kapanır.',

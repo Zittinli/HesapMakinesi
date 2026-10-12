@@ -21,6 +21,7 @@ class MessageBubble extends StatelessWidget {
     this.onLongPress,
     this.onTap,
     this.highlighted = false,
+    this.starred = false,
     this.selected = false,
     this.pending = false,
     this.downloaded = false,
@@ -37,6 +38,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onLongPress;
   final VoidCallback? onTap;
   final bool highlighted;
+  final bool starred;
   final bool selected;
   final bool pending;
   final bool downloaded;
@@ -84,7 +86,16 @@ class MessageBubble extends StatelessWidget {
                         : const Color(0xFF2C2C2C),
                   ),
                 ),
-                child: Column(
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.only(
+                        top: starred ? 8 : 0,
+                        left: starred && !isMine ? 12 : 0,
+                        right: starred && isMine ? 12 : 0,
+                      ),
+                      child: Column(
                   crossAxisAlignment: isMine
                       ? CrossAxisAlignment.end
                       : CrossAxisAlignment.start,
@@ -165,6 +176,20 @@ class MessageBubble extends StatelessWidget {
                         isMine: isMine,
                         isRead: isRead,
                         pending: pending,
+                      ),
+                  ],
+                ),
+                    ),
+                    if (starred)
+                      Positioned(
+                        top: -2,
+                        right: isMine ? -4 : null,
+                        left: isMine ? null : -4,
+                        child: const Icon(
+                          Icons.star,
+                          size: 13,
+                          color: Color(0xFFD0D0D0),
+                        ),
                       ),
                   ],
                 ),

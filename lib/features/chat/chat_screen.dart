@@ -16,6 +16,7 @@ import '../../models/chat_pref_model.dart';
 import '../../models/message_model.dart';
 import '../../models/moderation_model.dart';
 import '../../models/report_model.dart';
+import '../../models/starred_message.dart';
 import '../../models/user_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
@@ -26,6 +27,7 @@ import '../../services/nudge_service.dart';
 import '../../services/outgoing_queue_service.dart';
 import '../../services/settings_service.dart';
 import '../../services/storage_service.dart';
+import '../settings/starred_messages_screen.dart';
 import '../../widgets/profile_avatar.dart';
 import '../../widgets/profile_photo_view.dart';
 import 'chat_search_screen.dart';
@@ -108,6 +110,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   double _keyboardInset = 0;
   final Set<String> _downloadingMediaIds = {};
   final Set<String> _selectedMessageIds = {};
+  StreamSubscription<List<StarredMessage>>? _starSub;
+  Set<String> _starredIds = const {};
   String? _notice;
   Timer? _noticeTimer;
   bool _loadingOlder = false;
@@ -145,6 +149,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (widget.otherUserId.isNotEmpty) {
       _otherUserStream ??= authService.watchUser(widget.otherUserId);
     }
+    if (_starSub == null && widget.chatId.isNotEmpty) {
+      _starSub = chatService.watchStarred(uid).listen((stars) {
+        if (!mounted) return;
+        setState(() {
+          _starredIds = {
+            for (final star in stars)
+              if (star.chatId == widget.chatId) star.messageId,
+          };
+        });
+      });
+    }
   }
 
   @override
@@ -178,6 +193,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _scrollController.dispose();
     _focusNode.dispose();
     _noticeTimer?.cancel();
+    _starSub?.cancel();
     _setTyping(false);
     super.dispose();
   }
@@ -586,13 +602,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF161616),
+      isScrollControlled: true,
       builder: (context) {
         final photo = user?.visiblePhotoUrl ?? '';
         final name = user?.visibleName ?? widget.otherUserName;
         return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-            child: Column(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -639,6 +660,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   'Kayıt: ${user?.createdAt == null ? '-' : ChatFormat.eventDateTime(user!.createdAt)}',
                   style: const TextStyle(color: Colors.white54),
                 ),
+                if (widget.chatId.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Yıldızlı mesajlar',
+                    style: TextStyle(color: Colors.white70, fontSize: 15),
+                  ),
+                  const SizedBox(height: 4),
+                  StarredMessageSection(
+                    onlyChatId: widget.chatId,
+                    onOpen: (star) {
+                      Navigator.pop(context);
+                      unawaited(
+                        _jumpToMessage(star.messageId, _lastMarkedMessages),
+                      );
+                    },
+                  ),
+                ],
                 if (!widget.isGroup &&
                     widget.otherUserId.isNotEmpty &&
                     widget.chatId.isNotEmpty) ...[
@@ -734,6 +772,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   ),
                 ],
               ],
+            ),
             ),
           ),
         );
@@ -1583,6 +1622,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         if (message.hasMedia || message.hasFile)
           const MessageMenuEntry('download', 'İndir'),
         const MessageMenuEntry('reply', 'Yanıtla'),
+        if (widget.chatId.isNotEmpty && _canSelect(message))
+          MessageMenuEntry(
+            _starredIds.contains(message.id) ? 'unstar' : 'star',
+            _starredIds.contains(message.id)
+                ? 'Yıldızı kaldır'
+                : 'Mesajı yıldızla',
+          ),
         if (widget.chatId.isNotEmpty)
           const MessageMenuEntry('details', 'Ayrıntı'),
         if (_canEdit(message))
@@ -1623,6 +1669,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         await _downloadMedia(message);
       case 'reply':
         _startReply(message);
+      case 'star':
+        await _setStar(message, true);
+      case 'unstar':
+        await _setStar(message, false);
       case 'details':
         await _showMessageDetails(message);
       case 'edit':
@@ -1642,6 +1692,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         if (deleteAll == true && mounted) {
           await _deleteMessage(message, forEveryone: true);
         }
+    }
+  }
+
+  Future<void> _setStar(ChatMessage message, bool starred) async {
+    final uid = _myUid;
+    final service = _chatService;
+    if (uid == null || service == null || widget.chatId.isEmpty) return;
+    try {
+      await service.setMessageStarred(
+        userId: uid,
+        chatId: widget.chatId,
+        message: message,
+        starred: starred,
+      );
+    } catch (error) {
+      debugPrint('HM_STAR_FAILED: $error');
+      if (mounted) _showNotice('Yıldız kaydedilemedi.');
     }
   }
 
@@ -2420,6 +2487,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                                 highlighted:
                                                     message.id ==
                                                     _highlightedMessageId,
+                                                starred: _starredIds.contains(
+                                                  message.id,
+                                                ),
                                                 onLongPress: () =>
                                                     _toggleMessageSelection(
                                                       message,
